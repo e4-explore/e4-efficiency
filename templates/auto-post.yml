@@ -1,0 +1,60 @@
+name: Auto-post project update
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: auto-post-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install npm deps
+        working-directory: .github/auto-post
+        run: npm install --no-audit --no-fund
+
+      - name: Install Chromium for Playwright
+        working-directory: .github/auto-post
+        run: npx playwright install --with-deps chromium
+
+      - name: Resolve repo homepage URL
+        id: meta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          HOMEPAGE=$(gh api repos/${{ github.repository }} -q .homepage)
+          if [ -z "$HOMEPAGE" ] || [ "$HOMEPAGE" = "null" ]; then
+            echo "::error::Repo homepage URL is empty. Set it under Settings → top of General → Website."
+            exit 1
+          fi
+          echo "homepage=$HOMEPAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Generate post and publish to X
+        working-directory: .github/auto-post
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          HOMEPAGE_URL: ${{ steps.meta.outputs.homepage }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+        run: node post.mjs

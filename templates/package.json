@@ -1,0 +1,10 @@
+{
+  "name": "auto-post",
+  "private": true,
+  "type": "module",
+  "description": "GitHub Actions job that posts merged-to-main updates to X. Installed by project-update-auto-poster.",
+  "dependencies": {
+    "playwright": "^1.49.0",
+    "twitter-api-v2": "^1.18.0"
+  }
+}
