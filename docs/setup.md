@@ -58,12 +58,28 @@ In the target repo on GitHub: **Settings → Secrets and variables → Actions
 | `X_ACCESS_TOKEN`        | Authentication "Access Token"         |
 | `X_ACCESS_TOKEN_SECRET` | Authentication "Access Token Secret"  |
 
-## 5. Set the repo homepage URL
+## 5. Pick an image source
+
+You have two options. Pick one.
+
+### Option A — Live screenshot of your deployed site (default)
 
 GitHub: **Settings → top of General → Website**. Paste the deployed URL of
 your project (e.g. `https://your-project.vercel.app`). The workflow reads
-this field via the GitHub API and uses it as the base for screenshots. If
-it's empty, the workflow refuses to run.
+this field via the GitHub API and uses it as the base for screenshots
+(Gemini picks the path per commit).
+
+### Option B — Static cover image (for repos with no deployed UI)
+
+If your project is a library, skill, CLI, or anything else without a URL
+worth screenshotting, drop a PNG at:
+
+```
+.github/auto-post/cover.png
+```
+
+Recommended size: 1280×800. When this file exists, the workflow uses it
+verbatim and skips the screenshot step. The homepage URL is then optional.
 
 ## 6. Commit and push
 
@@ -78,7 +94,8 @@ succeeds, you'll see a tweet on your X account within ~1 minute.
 
 ## Troubleshooting
 
-**"Repo homepage URL is empty"** — set the Website field (step 5).
+**Missing HOMEPAGE_URL error** — set the Website field (option A) OR commit
+a `.github/auto-post/cover.png` (option B).
 
 **Gemini 429 errors** — you've hit the free-tier limit for the day; try again
 tomorrow, or upgrade the key.

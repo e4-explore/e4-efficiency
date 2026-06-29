@@ -60,7 +60,8 @@ no exclamation marks, ≤1 emoji, under 240 chars.
 - ✅ Auto-posts (no review step)
 - ✅ Direct X API via OAuth 1.0a (supports media upload)
 - ✅ Gemini 2.5 Flash for text generation (free tier)
-- ✅ Screenshots a chosen subpath of the repo's homepage URL
+- ✅ Screenshots a chosen subpath of the repo's homepage URL, OR uses a static
+  `.github/auto-post/cover.png` if committed (for repos without a deployed UI)
 - ✅ Single hardcoded voice
 
 ## What's deliberately not in the thin slice

@@ -62,9 +62,14 @@ voice, screenshot logic, etc.), edit the files this skill scaffolds —
    Note: X requires OAuth 1.0a user-context credentials to upload media and
    post on a user's behalf. Bearer tokens alone will not work.
 
-4. **Tell the user to set the repo's Homepage URL** (Settings → top of General,
-   "Website" field) to the deployed site you want screenshots of. The workflow
-   reads this field via the GitHub API; no extra config needed.
+4. **Pick the image source:**
+   - **Live screenshot (default):** ask the user to set the repo's Homepage URL
+     (Settings → top of General, "Website" field) to the deployed site. The
+     workflow reads this field via the GitHub API; no extra config.
+   - **Static cover (no deployed UI):** for repos without a screenshot-able URL
+     (skills, libs, CLIs), ask the user to commit a 1280×800 PNG at
+     `.github/auto-post/cover.png`. When present, the workflow uses it
+     verbatim and skips the screenshot step entirely. Homepage URL not needed.
 
 5. **Commit and push** the two new files. The next merge to `main` triggers
    the first auto-post.
