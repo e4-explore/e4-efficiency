@@ -30,8 +30,8 @@
 // / composite action, so it can gate before this script runs and stay
 // push-only. See auto-post.yml / actions/auto-post/action.yml.
 
-import { existsSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
+import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -455,6 +455,9 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
     console.log('Posted tweet id:', tweet.data.id);
 
     // Record for future runs (the workflow commits this file back to the repo).
+    // Ensure the data dir exists — a referenced-model consumer may configure
+    // everything via inputs and have no .github/auto-post/ directory yet.
+    mkdirSync(dirname(HISTORY_PATH), { recursive: true });
     appendFileSync(HISTORY_PATH, JSON.stringify({
       sha: GITHUB_SHA,
       tweet_id: tweet.data.id,
