@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Installs the project-update-auto-poster into a target git repo.
+# Installs the project-update-auto-poster into a target git repo (VENDORED
+# model). The referenced composite action is usually preferable — a thin caller
+# workflow that `uses: e4-explore/e4-efficiency/actions/auto-post@v1`, so fixes
+# propagate without re-running this script. See docs/setup.md §1A. Use this
+# vendored install when you want everything in-repo with no external action.
 # Usage: ./install.sh <path-to-target-repo>
 
 set -euo pipefail
@@ -52,7 +56,12 @@ Next steps:
        c. Settings → top of General → Website: set the deployed URL to
           screenshot.
 
-  3. Commit and push the new files. The next merge to main triggers the first post.
+  3. (Optional) Deploy-gate + commit-link via repo variables (Settings →
+     Secrets and variables → Actions → Variables):
+       DEPLOY_GATE_HEALTH_URL   a health endpoint returning the deployed SHA
+       INCLUDE_COMMIT_LINK      set to "true" to append the commit URL
+
+  4. Commit and push the new files. The next merge to main triggers the first post.
      To post about merges that already landed: Actions tab → Auto-post project
      update → Run workflow → paste the commit SHA.
 

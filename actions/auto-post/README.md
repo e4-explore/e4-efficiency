@@ -1,0 +1,89 @@
+# auto-post composite action
+
+Reference this from any repo to auto-post a merge to X with a screenshot. It
+bundles the whole pipeline (`post.mjs`), so consumers keep only a thin caller
+workflow instead of vendoring the script — pin a version tag and updates
+propagate automatically.
+
+## Usage
+
+```yaml
+name: Auto-post project update
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['.github/auto-post/history.jsonl']
+  workflow_dispatch:
+    inputs:
+      sha: { required: true, type: string }
+permissions:
+  contents: write
+concurrency:
+  group: auto-post
+  cancel-in-progress: false
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: e4-explore/e4-efficiency/actions/auto-post@v1
+        with:
+          gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
+          x-api-key: ${{ secrets.X_API_KEY }}
+          x-api-secret: ${{ secrets.X_API_SECRET }}
+          x-access-token: ${{ secrets.X_ACCESS_TOKEN }}
+          x-access-token-secret: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          homepage-url: https://your-app.example.com
+          routes: '["/", "/features"]'
+          include-commit-link: 'false'
+          deploy-gate-health-url: https://your-app.example.com/api/health
+          sha: ${{ github.event.inputs.sha }}
+```
+
+## Inputs
+
+| Input | Required | Default | Notes |
+|-------|----------|---------|-------|
+| `gemini-api-key` | yes | — | Free tier is fine. |
+| `x-api-key` / `x-api-secret` | yes | — | OAuth 1.0a consumer keys. |
+| `x-access-token` / `x-access-token-secret` | yes | — | Read+Write. |
+| `homepage-url` | no | `''` | Deployed site to screenshot. Required unless the consumer commits `cover.png` or a `config.json` preview. |
+| `routes` | no | `''` | JSON array of route paths to hint the screenshotter. |
+| `include-commit-link` | no | `'false'` | Append the commit URL to the post. |
+| `gemini-model` | no | `''` | Pin a model id; else the fallback chain is used. |
+| `deploy-gate-health-url` | no | `''` | Poll (push-only) until it reports the pushed SHA before screenshotting. |
+| `deploy-gate-sha-json-path` | no | `'.commit'` | jq path to the SHA in the health response. |
+| `deploy-gate-timeout-seconds` | no | `'720'` | Deploy-gate timeout. |
+| `history-commit-name` | no | `${{ github.actor }}` | git identity for the history commit. |
+| `history-commit-email` | no | `${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com` | Maps to a real, trusted deployer (matters for Vercel). |
+| `github-token` | no | `${{ github.token }}` | Reads commit context, pushes history. |
+| `sha` | no | `''` | Backfill a specific commit. Empty on push = the pushed commit. |
+
+## Consumer-side config (optional, committed in the consumer repo)
+
+- `.github/auto-post/cover.png` — static image, used verbatim (highest priority).
+- `.github/auto-post/config.json` — `{ "preview": {...}, "routes": [...], "includeCommitLink": bool }`.
+  A `preview` build/serve makes screenshots match the exact commit (no deployed
+  URL needed). `routes`/`includeCommitLink` here are overridden by the action
+  inputs when those are set.
+- `.github/auto-post/history.jsonl` — written by the action and committed back;
+  the caller's `paths-ignore` keeps that commit from retriggering the workflow.
+
+## Deploy-gate
+
+If `deploy-gate-health-url` is set, the action waits (on push only) until that
+endpoint reports the pushed commit SHA, so it never screenshots a stale deploy.
+The consumer must expose the deployed commit from a lightweight route. On
+Vercel:
+
+```ts
+// app/api/health/route.ts
+import { NextResponse } from 'next/server';
+export function GET() {
+  return NextResponse.json({ commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null });
+}
+```
+
+Then set `deploy-gate-sha-json-path: '.commit'` (the default).

@@ -1,0 +1,155 @@
+name: 'Project update auto-poster'
+description: 'Generate and publish an in-voice X post about a merge, with a screenshot of the change.'
+
+# Composite actions cannot read the `secrets` context, so every secret is
+# passed in as an input by the caller (e.g. `${{ secrets.GEMINI_API_KEY }}`).
+inputs:
+  gemini-api-key:
+    description: 'Google Gemini API key (free tier is fine).'
+    required: true
+  x-api-key:
+    description: 'X (Twitter) OAuth 1.0a consumer API key.'
+    required: true
+  x-api-secret:
+    description: 'X consumer API secret.'
+    required: true
+  x-access-token:
+    description: 'X access token (Read+Write).'
+    required: true
+  x-access-token-secret:
+    description: 'X access token secret.'
+    required: true
+  homepage-url:
+    description: 'Deployed site to screenshot. Required unless the consumer uses cover.png or a config.json preview build.'
+    required: false
+    default: ''
+  routes:
+    description: 'JSON array of route paths to hint the screenshotter, e.g. ''["/", "/players"]''.'
+    required: false
+    default: ''
+  include-commit-link:
+    description: 'Append the commit URL to the post text ("true"/"false").'
+    required: false
+    default: 'false'
+  gemini-model:
+    description: 'Pin a specific Gemini model id; otherwise the built-in fallback chain is used.'
+    required: false
+    default: ''
+  deploy-gate-health-url:
+    description: 'If set (and event is push), wait until this endpoint reports the pushed commit SHA before screenshotting. Prevents capturing the old UI while a deploy is in flight.'
+    required: false
+    default: ''
+  deploy-gate-sha-json-path:
+    description: 'jq path to the deployed commit SHA in the health response.'
+    required: false
+    default: '.commit'
+  deploy-gate-timeout-seconds:
+    description: 'How long to wait for the deploy before failing.'
+    required: false
+    default: '720'
+  history-commit-name:
+    description: 'git user.name for the history commit. Defaults to the triggering actor (a real account Vercel will deploy from).'
+    required: false
+    default: '${{ github.actor }}'
+  history-commit-email:
+    description: 'git user.email for the history commit. Defaults to the actor''s github-noreply address, which Vercel maps to a real, trusted deployer.'
+    required: false
+    default: '${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com'
+  github-token:
+    description: 'Token used to read commit context and push the history commit.'
+    required: false
+    default: '${{ github.token }}'
+  sha:
+    description: 'Commit SHA to post about (backfill). Leave empty on push events to use the pushed commit.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install action deps
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: npm install --no-audit --no-fund
+
+    - name: Install Chromium for Playwright
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: npx playwright install --with-deps chromium
+
+    # Deploy-gate: on a fresh push, don't screenshot the deployed site until it
+    # actually serves the pushed commit, or it captures the OLD UI. Polls the
+    # consumer's health endpoint (which must expose the deployed commit SHA).
+    # Push-only: backfills target already-landed SHAs that won't match prod, so
+    # they screenshot prod as-is.
+    - name: Wait for deploy
+      if: github.event_name == 'push' && inputs.deploy-gate-health-url != ''
+      shell: bash
+      env:
+        TARGET_SHA: ${{ github.sha }}
+        HEALTH_URL: ${{ inputs.deploy-gate-health-url }}
+        SHA_JSON_PATH: ${{ inputs.deploy-gate-sha-json-path }}
+        TIMEOUT: ${{ inputs.deploy-gate-timeout-seconds }}
+      run: |
+        echo "Waiting for $HEALTH_URL to report commit $TARGET_SHA (path '$SHA_JSON_PATH', up to ${TIMEOUT}s)."
+        deadline=$(( $(date +%s) + TIMEOUT ))
+        while [ "$(date +%s)" -lt "$deadline" ]; do
+          deployed=$(curl -fsS "$HEALTH_URL?t=$(date +%s)" | jq -r "${SHA_JSON_PATH} // empty" || true)
+          if [ "$deployed" = "$TARGET_SHA" ]; then
+            echo "Deployed commit matches target — proceeding."
+            exit 0
+          fi
+          echo "Deployed commit is '${deployed:-<none>}'; not yet '$TARGET_SHA'. Retrying in 15s…"
+          sleep 15
+        done
+        echo "::error::Deploy of $TARGET_SHA not detected within ${TIMEOUT}s; refusing to post a stale screenshot."
+        exit 1
+
+    - name: Generate post and publish to X
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        AUTOPOST_DATA_DIR: .github/auto-post
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        # Backfill SHA input wins if present; otherwise the pushed commit.
+        GITHUB_SHA: ${{ inputs.sha != '' && inputs.sha || github.sha }}
+        GITHUB_SERVER_URL: ${{ github.server_url }}
+        TRIGGER: ${{ github.event_name }}
+        HOMEPAGE_URL: ${{ inputs.homepage-url }}
+        ROUTES: ${{ inputs.routes }}
+        INCLUDE_COMMIT_LINK: ${{ inputs.include-commit-link }}
+        GEMINI_MODEL: ${{ inputs.gemini-model }}
+        GEMINI_API_KEY: ${{ inputs.gemini-api-key }}
+        X_API_KEY: ${{ inputs.x-api-key }}
+        X_API_SECRET: ${{ inputs.x-api-secret }}
+        X_ACCESS_TOKEN: ${{ inputs.x-access-token }}
+        X_ACCESS_TOKEN_SECRET: ${{ inputs.x-access-token-secret }}
+      run: node "$GITHUB_ACTION_PATH/post.mjs"
+
+    - name: Persist post history
+      if: success()
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        HISTORY_NAME: ${{ inputs.history-commit-name }}
+        HISTORY_EMAIL: ${{ inputs.history-commit-email }}
+        BRANCH: ${{ github.ref_name }}
+      run: |
+        git config user.name "$HISTORY_NAME"
+        git config user.email "$HISTORY_EMAIL"
+        git add .github/auto-post/history.jsonl
+        if git diff --cached --quiet; then
+          echo "No history changes to commit."
+          exit 0
+        fi
+        git commit -m "chore(auto-post): record post history [skip ci]"
+        # main may have moved while this job ran; rebase our one commit onto its
+        # tip. Works from the detached HEAD that actions/checkout leaves.
+        git fetch origin "$BRANCH"
+        git rebase "origin/$BRANCH"
+        git push origin "HEAD:$BRANCH"

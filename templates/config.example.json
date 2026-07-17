@@ -1,10 +1,11 @@
 {
-  "_comment": "Rename to config.json to activate. `preview` builds and serves the pushed code in CI so screenshots always match the commit — no deployed URL needed. `routes` is an optional hint list that helps Gemini pick which pages to screenshot.",
+  "_comment": "Rename to config.json to activate (vendored mode only — the referenced action takes these as inputs instead). `preview` builds & serves the pushed code in CI so screenshots match the commit exactly (no deployed URL needed); omit it to screenshot the deployed homepage. `routes` hints Gemini toward real pages worth screenshotting. `includeCommitLink` appends the commit URL to the post (default false).",
   "preview": {
     "command": "npm ci && npm run build && npx serve -l 4173 dist",
     "port": 4173,
     "readyPath": "/",
     "timeoutSeconds": 180
   },
-  "routes": ["/", "/example", "/example/nested"]
+  "routes": ["/", "/example", "/example/nested"],
+  "includeCommitLink": false
 }

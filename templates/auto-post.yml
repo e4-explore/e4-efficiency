@@ -1,5 +1,10 @@
 name: Auto-post project update
 
+# VENDORED workflow (self-contained). Prefer the referenced composite action
+# instead — a thin caller that `uses: e4-explore/e4-efficiency/actions/auto-post@v1`
+# so fixes propagate without re-vendoring. See docs/setup.md. This file remains
+# for consumers who want everything in-repo with no external action dependency.
+
 on:
   push:
     branches: [main]
@@ -23,7 +28,7 @@ concurrency:
 jobs:
   post:
     runs-on: ubuntu-latest
-    timeout-minutes: 20 # local preview mode may run a full build
+    timeout-minutes: 25 # deploy-gate can wait up to 12 min for a deploy
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,6 +58,34 @@ jobs:
           # post.mjs decides whether homepage URL is required
           # (cover.png and config.json preview modes skip it).
 
+      # Optional deploy-gate: set the repo variable DEPLOY_GATE_HEALTH_URL to a
+      # health endpoint that reports the deployed commit SHA, and this step
+      # waits (on push only) until it serves the pushed commit before
+      # screenshotting — so a lagging deploy can't yield an old-UI screenshot.
+      # Optional vars: DEPLOY_GATE_SHA_JSON_PATH (jq path, default .commit),
+      # DEPLOY_GATE_TIMEOUT_SECONDS (default 720).
+      - name: Wait for deploy
+        if: github.event_name == 'push' && vars.DEPLOY_GATE_HEALTH_URL != ''
+        env:
+          TARGET_SHA: ${{ github.sha }}
+          HEALTH_URL: ${{ vars.DEPLOY_GATE_HEALTH_URL }}
+          SHA_JSON_PATH: ${{ vars.DEPLOY_GATE_SHA_JSON_PATH || '.commit' }}
+          TIMEOUT: ${{ vars.DEPLOY_GATE_TIMEOUT_SECONDS || '720' }}
+        run: |
+          echo "Waiting for $HEALTH_URL to report commit $TARGET_SHA (path '$SHA_JSON_PATH', up to ${TIMEOUT}s)."
+          deadline=$(( $(date +%s) + TIMEOUT ))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            deployed=$(curl -fsS "$HEALTH_URL?t=$(date +%s)" | jq -r "${SHA_JSON_PATH} // empty" || true)
+            if [ "$deployed" = "$TARGET_SHA" ]; then
+              echo "Deployed commit matches target — proceeding."
+              exit 0
+            fi
+            echo "Deployed commit is '${deployed:-<none>}'; not yet '$TARGET_SHA'. Retrying in 15s…"
+            sleep 15
+          done
+          echo "::error::Deploy of $TARGET_SHA not detected within ${TIMEOUT}s; refusing to post a stale screenshot."
+          exit 1
+
       - name: Generate post and publish to X
         working-directory: .github/auto-post
         env:
@@ -63,6 +96,8 @@ jobs:
           GITHUB_SERVER_URL: ${{ github.server_url }}
           TRIGGER: ${{ github.event_name }}
           HOMEPAGE_URL: ${{ steps.meta.outputs.homepage }}
+          # Optional: set repo variable INCLUDE_COMMIT_LINK=true to append the commit URL.
+          INCLUDE_COMMIT_LINK: ${{ vars.INCLUDE_COMMIT_LINK }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           X_API_KEY: ${{ secrets.X_API_KEY }}
           X_API_SECRET: ${{ secrets.X_API_SECRET }}
@@ -72,9 +107,15 @@ jobs:
 
       - name: Persist post history
         if: success()
+        # Commit as the triggering actor's real github-noreply identity. A
+        # fabricated bot identity can be rejected by deploy platforms that map
+        # commit author → GitHub account (e.g. Vercel deploys it as "Blocked").
+        env:
+          HISTORY_NAME: ${{ github.actor }}
+          HISTORY_EMAIL: ${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com
         run: |
-          git config user.name "auto-post[bot]"
-          git config user.email "auto-post[bot]@users.noreply.github.com"
+          git config user.name "$HISTORY_NAME"
+          git config user.email "$HISTORY_EMAIL"
           git add .github/auto-post/history.jsonl
           if git diff --cached --quiet; then
             echo "No history changes to commit."

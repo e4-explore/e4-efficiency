@@ -1,85 +1,49 @@
-# Handoff prompt — project-update-auto-poster
+# Handoff — project-update-auto-poster
 
-Copy everything below the line into a new session to continue.
+Status as of the v1 refactor. Copy below the line into a new session to continue.
 
 ---
 
-I'm continuing work on a Claude Code skill called **project-update-auto-poster**.
-It's a "self-marketer" for builders: when code merges to `main`, a GitHub
-Actions workflow auto-generates a short, in-voice post about the change (with a
-screenshot) and publishes it to X. No human in the loop.
+I'm working on **project-update-auto-poster** in `e4-explore/e4-efficiency`
+(branch `claude/project-update-auto-poster-d8ol8k`, or `main` if merged). It's a
+"self-marketer": when code merges to `main`, GitHub Actions auto-generates a
+short, in-voice X post about the change (with a screenshot) and publishes it. No
+human in the loop. Read `SKILL.md`, `actions/auto-post/README.md`, and
+`docs/setup.md` for full context.
 
-## Where the code lives
+## Layout (v1)
 
-- Repo: `e4-explore/e4-efficiency`
-- Branch: `claude/project-update-auto-poster-d8ol8k` (do all work here; create it
-  from origin if the fresh container doesn't have it)
-- This session's GitHub access may be scoped to specific repos — check what you
-  can reach before assuming you can touch SoccerProps directly.
+- **Referenced model (recommended):** `actions/auto-post/action.yml` — a
+  composite action a consumer references as
+  `e4-explore/e4-efficiency/actions/auto-post@v1` from a thin caller workflow.
+  Bundles `actions/auto-post/post.mjs` + `package.json`. Secrets/config are
+  action inputs. Deploy-gate + history commit-back are steps in the action.
+- **Vendored model:** `templates/` + `install.sh` copy the same `post.mjs` and a
+  self-contained workflow into a consumer's `.github/`. Deploy-gate / commit-link
+  driven by repo variables.
+- `post.mjs` is identical in `templates/` and `actions/auto-post/`; it runs in
+  both modes via `AUTOPOST_DATA_DIR`. Keep the two copies in sync.
 
-## What's already built (on that branch)
+## Pipeline
 
-```
-SKILL.md                 ← skill definition + when-to-invoke
-README.md                ← overview, feature list, roadmap
-install.sh               ← copies templates/ into any target repo's .github/
-docs/setup.md            ← full end-user setup walkthrough
-templates/
-  auto-post.yml          ← GitHub Actions workflow
-  post.mjs               ← the whole pipeline (Gemini + Playwright + X API)
-  package.json           ← pins playwright + twitter-api-v2
-  config.example.json    ← optional per-repo preview-build config
-.github/                 ← the skill dogfooded into THIS repo (same files)
-```
+Commit context → Gemini draft + candidate routes (model-fallback chain) → image
+(cover.png | local preview build | deployed site, deploy-gated) → vision picks
+best screenshot → editor pass vs. rubric + history → post to X → append
+`history.jsonl`, committed back as a real-account identity.
 
-Pipeline in `post.mjs`:
-1. Pull commit context from the GitHub API.
-2. Gemini 2.5 Flash (free tier) drafts post text + proposes up to 3 routes to
-   screenshot.
-3. Image source, first match wins:
-   a. `.github/auto-post/cover.png` — static image, used verbatim
-   b. `config.json` `preview` — build & serve the pushed code in CI, screenshot
-      candidate routes locally (image always matches the commit)
-   c. repo homepage URL — screenshot the deployed site
-   When multiple routes are shot, Gemini vision compares the actual images and
-   picks the most engaging one.
-4. Editor pass: Gemini critiques the draft against an engagement RUBRIC + the
-   last 10 posts from history, then rewrites it.
-5. Post to X (OAuth 1.0a, media upload). Append to
-   `.github/auto-post/history.jsonl`, which the workflow commits back so future
-   runs vary their hooks/structure.
+## Released
 
-Voice is hardcoded (VOICE const in post.mjs): concise builder tone, 1–2
-sentences, past tense, no hype words, no exclamation marks, ≤1 emoji, <240 chars.
+- Tagged `v1.0.0` and moving `v1`. SoccerProps pins `@v1`.
 
-Triggers: push to `main`, plus manual `workflow_dispatch` with a `sha` input for
-backfilling merges that already landed.
+## Known limits (v2 candidates)
 
-## Known limits (deliberate v2 candidates)
+Learns from its own output (rubric + history), not engagement (likes/impressions
+— needs X analytics beyond the free tier). No approval queue, no commit batching,
+no chore filtering, single voice, single X account per repo, no video posts.
 
-- Learns from its OWN output (rubric + history), NOT from engagement
-  (likes/impressions) — that needs X analytics beyond the free API tier.
-- No approval/draft queue, no commit batching, no chore/docs filtering, single
-  hardcoded voice, single X account per repo, no video/screen-recording posts.
+## Open follow-ups
 
-## The actual goal right now
-
-Get the auto-poster live on my **SoccerProps** project and post about updates
-I've already pushed there.
-
-State of that effort:
-- ✅ All five GitHub secrets are already set in SoccerProps:
-  `GEMINI_API_KEY`, `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`,
-  `X_ACCESS_TOKEN_SECRET` (X app is OAuth 1.0a, Read+Write).
-- ⬜ Install the skill files into SoccerProps (`install.sh`).
-- ⬜ Configure an image source — likely Option B (local preview build) since it
-  always matches the commit. Need SoccerProps' real build/serve command, port,
-  and key routes.
-- ⬜ Commit + push `.github/` to SoccerProps `main` (that push triggers the first
-  post).
-- ⬜ Backfill recent merges: SoccerProps → Actions → "Auto-post project update"
-  → Run workflow → paste each commit SHA.
-
-Please help me finish the SoccerProps rollout. Start by confirming what repo
-access you have and asking me for SoccerProps' build command / port / routes if
-you can't infer them.
+- SoccerProps migration to the referenced action is done by the user separately
+  (this session's GitHub scope can't reach that repo).
+- If the action repo is private, the org Actions access setting must allow other
+  org repos to use it (docs/setup.md §1A).

@@ -19,11 +19,52 @@ When a commit lands on `main`:
 
 ## Install
 
-If you're inside Claude Code, just ask:
+Two ways in — see [docs/setup.md](docs/setup.md) for the full walkthrough
+(including X credentials).
 
-> Install the project-update-auto-poster in this repo.
+### A. Reference the composite action (recommended)
 
-The skill runs `install.sh` against the current repo. To install manually:
+The consumer repo keeps only a thin caller workflow that pins the shared action
+by tag; fixes propagate on the next run with no re-vendoring:
+
+```yaml
+# .github/workflows/auto-post.yml
+name: Auto-post project update
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['.github/auto-post/history.jsonl']
+  workflow_dispatch:
+    inputs:
+      sha: { required: true, type: string }
+permissions:
+  contents: write
+concurrency:
+  group: auto-post
+  cancel-in-progress: false
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: e4-explore/e4-efficiency/actions/auto-post@v1
+        with:
+          gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
+          x-api-key: ${{ secrets.X_API_KEY }}
+          x-api-secret: ${{ secrets.X_API_SECRET }}
+          x-access-token: ${{ secrets.X_ACCESS_TOKEN }}
+          x-access-token-secret: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          homepage-url: https://your-app.example.com
+          routes: '["/", "/features"]'
+          deploy-gate-health-url: https://your-app.example.com/api/health
+          sha: ${{ github.event.inputs.sha }}
+```
+
+Full input list: [`actions/auto-post/README.md`](actions/auto-post/README.md).
+
+### B. Vendored (self-contained)
 
 ```bash
 git clone https://github.com/e4-explore/e4-efficiency.git ~/skills/auto-poster
@@ -31,19 +72,7 @@ cd <your-target-repo>
 ~/skills/auto-poster/install.sh .
 ```
 
-This drops two files into your repo:
-
-```
-.github/workflows/auto-post.yml
-.github/auto-post/post.mjs
-.github/auto-post/package.json
-```
-
-Then follow the post-install steps the script prints (set 5 secrets, set the
-repo's homepage URL, commit, push).
-
-See [docs/setup.md](docs/setup.md) for a step-by-step walkthrough, including
-how to obtain X developer credentials.
+Copies the workflow + `post.mjs` into `.github/`. No external action dependency.
 
 ## Voice
 
@@ -54,19 +83,23 @@ that file to change it for all future installs.
 Current voice: concise builder tone, 1–2 sentences, past tense, no hype words,
 no exclamation marks, ≤1 emoji, under 240 chars.
 
-## What's in the thin slice
+## What's in v1
 
+- ✅ Two delivery models: referenced composite action (pin `@v1`) or vendored
 - ✅ Triggers on push to `main` via GitHub Actions
 - ✅ Backfill mode: manually run against any specific commit SHA
 - ✅ Auto-posts (no review step)
 - ✅ Direct X API via OAuth 1.0a (supports media upload)
-- ✅ Gemini 2.5 Flash for text generation (free tier)
+- ✅ Gemini free tier with a model-fallback chain (survives retired model ids)
 - ✅ Three image sources (first match wins): static `cover.png` → local
-  preview build of the pushed code (`config.json`) → deployed homepage URL
+  preview build of the pushed code → deployed homepage URL
+- ✅ Optional deploy-gate: wait until the deploy serves the pushed commit
+  before screenshotting (no stale-UI screenshots)
 - ✅ Multi-route screenshots with Gemini vision picking the most engaging shot
 - ✅ Editor pass: draft is critiqued against an engagement rubric and rewritten
-- ✅ Post history memory: past posts committed to `history.jsonl` and fed back
-  into the prompt so hooks and structure vary over time
+- ✅ Post history memory committed back (as a real identity, so Vercel doesn't
+  block it) and fed into the prompt so hooks vary over time
+- ✅ Optional commit-link toggle
 - ✅ Single hardcoded voice
 
 ## What's deliberately not in the thin slice
@@ -96,8 +129,8 @@ before.
 
 ## Cost
 
-- Gemini 2.5 Flash: free tier covers ~1500 requests/day. One post per merge is
-  comfortably within that.
+- Gemini (flash-latest / flash-lite): free tier covers ~1500 requests/day. One
+  post per merge is comfortably within that.
 - GitHub Actions: free tier covers 2000 minutes/month on public repos
   (unlimited), and each post-run takes ~1 minute.
 - X API: free tier allows 500 posts/month per app, more than enough for
