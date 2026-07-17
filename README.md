@@ -57,6 +57,7 @@ no exclamation marks, ≤1 emoji, under 240 chars.
 ## What's in the thin slice
 
 - ✅ Triggers on push to `main` via GitHub Actions
+- ✅ Backfill mode: manually run against any specific commit SHA
 - ✅ Auto-posts (no review step)
 - ✅ Direct X API via OAuth 1.0a (supports media upload)
 - ✅ Gemini 2.5 Flash for text generation (free tier)
@@ -71,6 +72,7 @@ an issue first.
 
 - Approval / draft queue
 - Commit batching ("merge 3 small fixes into one weekly post")
+- Batch backfill (post a range of commits in one run)
 - Filtering chore/deps/docs commits
 - Multiple social platforms (Bluesky, Mastodon, LinkedIn)
 - Multiple X accounts per repo

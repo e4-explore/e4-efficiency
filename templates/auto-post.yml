@@ -3,12 +3,18 @@ name: Auto-post project update
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Commit SHA to post about (for backfilling a merge that already landed).'
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: auto-post-${{ github.ref }}
+  group: auto-post-${{ github.event.inputs.sha || github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -47,8 +53,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_SHA: ${{ github.sha }}
+          # workflow_dispatch input wins if present (backfill mode); otherwise the push SHA.
+          GITHUB_SHA: ${{ github.event.inputs.sha || github.sha }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
+          TRIGGER: ${{ github.event_name }}
           HOMEPAGE_URL: ${{ steps.meta.outputs.homepage }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           X_API_KEY: ${{ secrets.X_API_KEY }}

@@ -71,8 +71,16 @@ voice, screenshot logic, etc.), edit the files this skill scaffolds —
      `.github/auto-post/cover.png`. When present, the workflow uses it
      verbatim and skips the screenshot step entirely. Homepage URL not needed.
 
-5. **Commit and push** the two new files. The next merge to `main` triggers
+5. **Commit and push** the new files. The next merge to `main` triggers
    the first auto-post.
+
+6. **Backfill previous merges (optional)**. To post about a commit that
+   already landed on `main`:
+   - Go to the target repo's Actions tab.
+   - Click "Auto-post project update" → "Run workflow".
+   - Enter the commit SHA in the `sha` field and run.
+
+   Same pipeline; just aimed at a specific SHA instead of the latest push.
 
 ## Voice
 

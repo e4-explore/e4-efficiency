@@ -92,6 +92,22 @@ git push
 That push itself triggers the first run. Watch the Actions tab; if it
 succeeds, you'll see a tweet on your X account within ~1 minute.
 
+## 7. (Optional) Backfill posts for merges that already landed
+
+The workflow also supports manual runs, so you can post about a commit that
+was merged before you installed the auto-poster.
+
+1. In the target repo on GitHub, go to the **Actions** tab.
+2. Pick **Auto-post project update** in the left sidebar.
+3. Click **Run workflow** (top right).
+4. Paste the commit SHA into the `sha` input and click Run.
+
+The workflow uses that SHA for the Gemini context and the commit link, but
+otherwise behaves identically to a push-triggered run (same voice, same
+image logic — screenshot or cover.png).
+
+Repeat once per commit you want backfilled. There's no batch mode yet.
+
 ## Troubleshooting
 
 **Missing HOMEPAGE_URL error** — set the Website field (option A) OR commit
