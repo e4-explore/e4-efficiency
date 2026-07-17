@@ -30,8 +30,8 @@
 // / composite action, so it can gate before this script runs and stay
 // push-only. See auto-post.yml / actions/auto-post/action.yml.
 
-import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
+import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { join, resolve, dirname, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -51,10 +51,10 @@ const GEMINI_MODELS = [
 
 const RUBRIC = `
 Engagement rubric (what makes a post worth reading):
-- The first five words earn the rest: lead with the change's payoff, not preamble.
+- One sentence, one idea: the change plus the reason it matters, joined naturally.
+- The "why" is product value ("we're including MLS bets now"), never a restatement of the change ("to reflect broader coverage").
 - Concrete beats abstract: name the thing ("live odds now refresh every 30s"), never "improved performance".
-- One idea per post. If the commit did three things, pick the one users feel.
-- Sound like a person shipping, not a changelog or a brand account.
+- Sound like a teammate mentioning what they shipped, not a changelog or a brand account.
 - Vary structure against recent posts — if the last post opened with the feature name, don't do it again.
 `.trim();
 
@@ -64,8 +64,9 @@ function buildVoice(includeCommitLink) {
     : '- Under 280 characters total.';
   return `
 Voice rules (follow strictly):
-- Concise, builder tone — like a Show HN comment from someone shipping.
-- 1–2 short sentences. Past tense. Plain language.
+- Exactly one casual sentence: what changed + why, e.g. "Updated the bet record header since we're including MLS bets now".
+- Builder tone — a teammate mentioning what they shipped, not an announcement.
+- Past tense. Plain language. Never the changelog pattern "X now does Y to reflect Z".
 - No hype words: never "amazing", "exciting", "game-changer", "thrilled", "stoked", "huge", "massive".
 - No exclamation marks.
 - At most one fitting emoji (optional, skip if unsure).
@@ -187,6 +188,165 @@ async function waitForServer(url, timeoutSeconds) {
   throw new Error(`Preview server never became ready at ${url} within ${timeoutSeconds}s`);
 }
 
+// ---------------------------------------------------------------- screenshot helpers
+
+async function shootRoutes(ctx, baseUrl, paths, tag) {
+  const shots = [];
+  for (const [i, path] of paths.entries()) {
+    const url = new URL(path, baseUrl).toString();
+    const file = join(tmpdir(), `auto-post-shot-${tag}-${i}.png`);
+    console.log(`Screenshotting candidate ${tag}/${i}: ${url}`);
+    try {
+      const page = await ctx.newPage();
+      await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 }).catch(async (err) => {
+        console.warn(`networkidle timed out (${err.message}); falling back to load.`);
+        await page.goto(url, { waitUntil: 'load', timeout: 30_000 });
+      });
+      await page.screenshot({ path: file, fullPage: false });
+      await page.close();
+      shots.push({ path, url, file });
+    } catch (err) {
+      console.warn(`Candidate ${tag}/${i} (${url}) failed: ${err.message} — skipping.`);
+    }
+  }
+  return shots;
+}
+
+// Vision pass: Gemini looks at the actual images and picks the best one.
+async function pickBestShot(shots, postText, commitMessage) {
+  if (shots.length === 1) return shots[0];
+  const pick = await gemini([
+    {
+      text: `You are choosing the single most engaging screenshot to attach to this social post:
+
+POST DRAFT: ${postText}
+COMMIT MESSAGE: ${commitMessage}
+
+Below are ${shots.length} screenshots, in order (index 0 first): ${shots.map((s, i) => `[${i}] ${s.path}`).join(', ')}.
+Pick the one that best SHOWS the change described — prefer visible content over empty states, error pages, or generic landing pages.
+
+Return ONLY JSON: { "best_index": number, "reason": string }`,
+    },
+    ...shots.map((s) => ({
+      inline_data: { mime_type: 'image/png', data: readFileSync(s.file).toString('base64') },
+    })),
+  ], { maxOutputTokens: 8192 });
+
+  const idx = Number.isInteger(pick.best_index) && pick.best_index >= 0 && pick.best_index < shots.length
+    ? pick.best_index : 0;
+  console.log(`Vision pick: [${idx}] ${shots[idx].path} — ${pick.reason ?? 'no reason given'}`);
+  return shots[idx];
+}
+
+// Screenshots just the changed component instead of the whole page. Finds the
+// element from the model's hint (visible text or CSS selector), climbs to a
+// container big enough to read as a crop, and shoots that element. Returns
+// null when the element can't be found or the container is basically the
+// whole page — the caller falls back to the full-page shot.
+async function shootElementCloseUp(ctx, url, hint, tag) {
+  if (!hint || (!hint.text && !hint.selector)) return null;
+  const page = await ctx.newPage();
+  try {
+    await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 }).catch(async () => {
+      await page.goto(url, { waitUntil: 'load', timeout: 30_000 });
+    });
+    let target = null;
+    if (hint.selector) {
+      try {
+        const loc = page.locator(hint.selector).first();
+        if (await loc.count() && await loc.isVisible().catch(() => false)) target = loc;
+      } catch { /* model-supplied selector may be invalid syntax */ }
+    }
+    if (!target && hint.text) {
+      const loc = page.getByText(hint.text, { exact: false }).first();
+      if (await loc.count() && await loc.isVisible().catch(() => false)) target = loc;
+    }
+    if (!target) {
+      console.warn(`Close-up: element not found for hint ${JSON.stringify(hint)}.`);
+      return null;
+    }
+
+    // The hint often matches a small label; climb to a crop-worthy container.
+    const handle = await target.evaluateHandle((el) => {
+      let n = el;
+      while (n.parentElement) {
+        const r = n.getBoundingClientRect();
+        if (r.width >= 280 && r.height >= 64) break;
+        n = n.parentElement;
+      }
+      return n;
+    });
+    const rect = await handle.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      return { w: r.width, h: r.height, vw: window.innerWidth, vh: window.innerHeight };
+    });
+    if (rect.w * rect.h > rect.vw * rect.vh * 0.85) {
+      console.warn('Close-up: container covers almost the whole page; using the full-page shot instead.');
+      return null;
+    }
+    const file = join(tmpdir(), `auto-post-closeup-${tag}.png`);
+    await handle.asElement().screenshot({ path: file });
+    console.log(`Close-up captured (${Math.round(rect.w)}x${Math.round(rect.h)}) on ${url}.`);
+    return file;
+  } catch (err) {
+    console.warn(`Close-up failed: ${err.message} — falling back to the full-page shot.`);
+    return null;
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
+// Vision check: does the chosen image actually show the change? Prevents
+// posting a screenshot of the wrong page when the changed component doesn't
+// render on any of the tried routes.
+async function shotShowsChange(file, postText, commitMessage) {
+  try {
+    const res = await gemini([
+      {
+        text: `POST DRAFT: ${postText}
+COMMIT MESSAGE: ${commitMessage}
+
+Does the attached screenshot visibly show the change this post talks about? Be strict: generic pages, empty states, error pages, or pages unrelated to the change are a "no".
+
+Return ONLY JSON: { "shows_change": boolean, "reason": string }`,
+      },
+      { inline_data: { mime_type: 'image/png', data: readFileSync(file).toString('base64') } },
+    ]);
+    console.log(`Shot verification: ${res.shows_change} — ${res.reason ?? ''}`);
+    return res.shows_change === true;
+  } catch (err) {
+    console.warn(`Shot verification errored (${err.message}); assuming the shot is fine.`);
+    return true;
+  }
+}
+
+// Best-effort list of files that define routes/pages in the consumer repo, so
+// the model can find where a changed component actually renders when the
+// first screenshot round misses.
+function listRouteFiles(repoRoot, max = 200) {
+  const SKIP = new Set(['node_modules', '.git', '.next', '.nuxt', '.svelte-kit', 'dist', 'build', 'out', 'coverage', '.vercel', '.github']);
+  const EXTS = /\.(jsx?|tsx?|vue|svelte|astro|html)$/;
+  const ROUTEY = /(^|\/)(pages|app|routes|views|screens)(\/|$)/;
+  const hits = [];
+  const walk = (dir, depth) => {
+    if (hits.length >= max || depth > 7) return;
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (hits.length >= max) return;
+      const full = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (!SKIP.has(e.name) && !e.name.startsWith('.')) walk(full, depth + 1);
+      } else if (EXTS.test(e.name)) {
+        const rel = relative(repoRoot, full);
+        if (ROUTEY.test(rel)) hits.push(rel);
+      }
+    }
+  };
+  walk(repoRoot, 0);
+  return hits;
+}
+
 // ---------------------------------------------------------------- main
 
 async function main() {
@@ -250,9 +410,11 @@ async function main() {
 
   // ---- 1. commit context ----
 
+  const ghHeaders = { Authorization: `Bearer ${GITHUB_TOKEN}`, 'User-Agent': 'auto-post' };
+
   const commitRes = await fetch(
     `https://api.github.com/repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}`,
-    { headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, 'User-Agent': 'auto-post' } },
+    { headers: ghHeaders },
   );
   if (!commitRes.ok) throw new Error(`GitHub commit fetch failed: ${commitRes.status} ${await commitRes.text()}`);
   const commit = await commitRes.json();
@@ -266,6 +428,49 @@ async function main() {
     deletions: f.deletions,
     patch: typeof f.patch === 'string' ? f.patch.slice(0, 1500) : undefined,
   }));
+
+  // The "why" of a change usually lives in the PR, not the merge commit.
+  // Best-effort: pushes that didn't come through a PR just skip this.
+  let pr = null;
+  try {
+    const prRes = await fetch(
+      `https://api.github.com/repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls`,
+      { headers: ghHeaders },
+    );
+    if (prRes.ok) {
+      const prs = await prRes.json();
+      if (Array.isArray(prs) && prs.length) {
+        pr = { title: prs[0].title ?? '', body: (prs[0].body ?? '').slice(0, 1200) };
+      }
+    }
+  } catch (err) {
+    console.warn(`PR context fetch failed: ${err.message}`);
+  }
+
+  // Recent commit subjects give the arc of work this change belongs to.
+  let recentSubjects = [];
+  try {
+    const listRes = await fetch(
+      `https://api.github.com/repos/${GITHUB_REPOSITORY}/commits?sha=${GITHUB_SHA}&per_page=11`,
+      { headers: ghHeaders },
+    );
+    if (listRes.ok) {
+      recentSubjects = (await listRes.json())
+        .slice(1) // drop the commit being posted about
+        .map((c) => (c.commit?.message ?? '').split('\n')[0])
+        .filter(Boolean)
+        .reverse(); // oldest → newest
+    }
+  } catch (err) {
+    console.warn(`Recent-commits fetch failed: ${err.message}`);
+  }
+
+  const prBlock = pr
+    ? `\nPULL REQUEST (usually says why the change was made)\n- Title: ${pr.title}\n- Body (truncated): ${pr.body || '(empty)'}\n`
+    : '';
+  const recentBlock = recentSubjects.length
+    ? `\nRECENT COMMITS, oldest first (the arc of work — mine these for why this change matters):\n${recentSubjects.map((s) => `- ${s}`).join('\n')}\n`
+    : '';
 
   const history = loadHistory(HISTORY_PATH);
 
@@ -290,14 +495,18 @@ COMMIT
 - Author: ${author}
 - Files changed (truncated):
 ${JSON.stringify(files, null, 2)}
-
+${prBlock}${recentBlock}
 TASK
 Return ONLY a JSON object matching this exact schema (no prose):
 {
   "post_text": string${wantRoutes ? `,
-  "candidate_paths": string[]   // 1 to 3 URL paths most likely to visually showcase this change,
+  "candidate_paths": string[],  // 1 to 3 URL paths most likely to visually showcase this change,
                                 // ordered best-guess first. Use "/" if unsure.
-                                // Examples: ["/", "/pricing", "/props/today"]` : ''}
+                                // Examples: ["/", "/pricing", "/props/today"]
+  "element_hint": {             // the single UI element the change is visible in (for a zoomed-in shot)
+    "text": string | null,      // short distinguishing text rendered inside it, exactly as a user sees it
+    "selector": string | null   // a CSS selector for it if the diff makes one obvious, else null
+  } | null                      // null when no single element visibly changed` : ''}
 }`,
   }]);
 
@@ -342,63 +551,88 @@ Return ONLY a JSON object matching this exact schema (no prose):
         ? draftPlan.candidate_paths : ['/'])
         .slice(0, 3)
         .map((p) => (typeof p === 'string' && p.trim() ? p.trim() : '/'));
+      const elementHint = (draftPlan.element_hint && typeof draftPlan.element_hint === 'object')
+        ? draftPlan.element_hint : null;
 
-      // Screenshot every candidate route. Temp files go to os.tmpdir() so we
+      // Screenshot candidate routes, pick the best full-page shot, then try to
+      // zoom into the changed component. Temp files go to os.tmpdir() so we
       // never pollute the consumer's working tree (referenced mode runs from
       // the repo root).
-      const shots = [];
       const browser = await chromium.launch();
       try {
         const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-        for (const [i, path] of candidates.entries()) {
-          const url = new URL(path, baseUrl).toString();
-          const file = join(tmpdir(), `auto-post-shot-${i}.png`);
-          console.log(`Screenshotting candidate ${i}: ${url}`);
-          try {
-            const page = await ctx.newPage();
-            await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 }).catch(async (err) => {
-              console.warn(`networkidle timed out (${err.message}); falling back to load.`);
-              await page.goto(url, { waitUntil: 'load', timeout: 30_000 });
-            });
-            await page.screenshot({ path: file, fullPage: false });
-            await page.close();
-            shots.push({ path, url, file });
-          } catch (err) {
-            console.warn(`Candidate ${i} (${url}) failed: ${err.message} — skipping.`);
+
+        const shots = await shootRoutes(ctx, baseUrl, candidates, 'r1');
+        if (!shots.length) throw new Error('Every candidate screenshot failed.');
+        const chosen = await pickBestShot(shots, postText, commitMessage);
+        const fallback = { file: chosen.file, note: `screenshot of ${chosen.url}` };
+
+        const closeup = await shootElementCloseUp(ctx, chosen.url, elementHint, 'r1');
+        imagePath = closeup ?? fallback.file;
+        imageNote = closeup ? `close-up of the changed component on ${chosen.url}` : fallback.note;
+
+        // Verify the image shows the change. If it doesn't, widen the search
+        // once: let the model map the diff to the repo's route/page files to
+        // find where the changed UI actually renders. Final fallback is the
+        // best full-page shot from the first round (previous behavior).
+        if (!(await shotShowsChange(imagePath, postText, commitMessage))) {
+          let recovered = false;
+          const routeFiles = listRouteFiles(REPO_ROOT);
+          if (routeFiles.length) {
+            try {
+              const tried = new Set(candidates);
+              const widened = await gemini([{
+                text: `A screenshot for this social post missed the change. Find where the changed UI actually renders.
+
+POST DRAFT: ${postText}
+COMMIT MESSAGE: ${commitMessage}
+FILES CHANGED: ${JSON.stringify(files.map((f) => f.filename))}
+ALREADY TRIED URL PATHS (do not repeat): ${JSON.stringify([...tried])}
+ROUTE/PAGE FILES IN THE REPO:
+${routeFiles.join('\n')}
+
+Map the changed files to the routes that render them.
+Return ONLY JSON:
+{
+  "candidate_paths": string[],  // 1 to 3 new URL paths where the change is most likely visible, best first
+  "element_hint": { "text": string | null, "selector": string | null } | null
+}`,
+              }]);
+
+              const newPaths = (Array.isArray(widened.candidate_paths) ? widened.candidate_paths : [])
+                .filter((p) => typeof p === 'string' && p.trim() && !tried.has(p.trim()))
+                .map((p) => p.trim())
+                .slice(0, 3);
+              if (newPaths.length) {
+                const shots2 = await shootRoutes(ctx, baseUrl, newPaths, 'r2');
+                if (shots2.length) {
+                  const chosen2 = await pickBestShot(shots2, postText, commitMessage);
+                  const hint2 = (widened.element_hint && typeof widened.element_hint === 'object')
+                    ? widened.element_hint : elementHint;
+                  const closeup2 = await shootElementCloseUp(ctx, chosen2.url, hint2, 'r2');
+                  const file2 = closeup2 ?? chosen2.file;
+                  if (await shotShowsChange(file2, postText, commitMessage)) {
+                    imagePath = file2;
+                    imageNote = closeup2
+                      ? `close-up of the changed component on ${chosen2.url}`
+                      : `screenshot of ${chosen2.url}`;
+                    recovered = true;
+                  }
+                }
+              }
+            } catch (err) {
+              console.warn(`Widened route search failed: ${err.message}`);
+            }
+          }
+          if (!recovered) {
+            console.warn('Change not visibly confirmed on any route; using the best full-page shot.');
+            imagePath = fallback.file;
+            imageNote = fallback.note;
           }
         }
       } finally {
         await browser.close();
       }
-      if (!shots.length) throw new Error('Every candidate screenshot failed.');
-
-      // Vision pass: Gemini looks at the actual images and picks the best one.
-      let chosen = shots[0];
-      if (shots.length > 1) {
-        const pick = await gemini([
-          {
-            text: `You are choosing the single most engaging screenshot to attach to this social post:
-
-POST DRAFT: ${postText}
-COMMIT MESSAGE: ${commitMessage}
-
-Below are ${shots.length} screenshots, in order (index 0 first): ${shots.map((s, i) => `[${i}] ${s.path}`).join(', ')}.
-Pick the one that best SHOWS the change described — prefer visible content over empty states, error pages, or generic landing pages.
-
-Return ONLY JSON: { "best_index": number, "reason": string }`,
-          },
-          ...shots.map((s) => ({
-            inline_data: { mime_type: 'image/png', data: readFileSync(s.file).toString('base64') },
-          })),
-        ], { maxOutputTokens: 8192 });
-
-        const idx = Number.isInteger(pick.best_index) && pick.best_index >= 0 && pick.best_index < shots.length
-          ? pick.best_index : 0;
-        chosen = shots[idx];
-        console.log(`Vision pick: [${idx}] ${chosen.path} — ${pick.reason ?? 'no reason given'}`);
-      }
-      imagePath = chosen.file;
-      imageNote = `screenshot of ${chosen.url}`;
     }
 
     // ---- 4. editor pass ----
@@ -413,7 +647,7 @@ Return ONLY JSON: { "best_index": number, "reason": string }`,
 ${RUBRIC}
 
 You are the editor. Improve the draft below so it scores as high as possible on the rubric while staying strictly inside the voice rules. If the draft is already strong, tighten it; do not pad it.
-${historyBlock}
+${historyBlock}${prBlock}
 DRAFT: ${postText}
 COMMIT MESSAGE: ${commitMessage}
 ATTACHED IMAGE: ${imageNote}

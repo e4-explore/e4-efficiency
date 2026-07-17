@@ -26,10 +26,13 @@ human in the loop. Read `SKILL.md`, `actions/auto-post/README.md`, and
 
 ## Pipeline
 
-Commit context → Gemini draft + candidate routes (model-fallback chain) → image
-(cover.png | local preview build | deployed site, deploy-gated) → vision picks
-best screenshot → editor pass vs. rubric + history → post to X → append
-`history.jsonl`, committed back as a real-account identity.
+Commit + merged-PR + recent-commit context → Gemini one-sentence draft
+(what changed + why) + candidate routes + changed-element hint (model-fallback
+chain) → image (cover.png | local preview build | deployed site, deploy-gated)
+→ vision picks best screenshot → element close-up when the changed component
+can be located → vision verification, with one widened route search over the
+repo's page files on a miss → editor pass vs. rubric + history → post to X →
+append `history.jsonl`, committed back as a real-account identity.
 
 ## Released
 

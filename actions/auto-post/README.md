@@ -18,6 +18,7 @@ on:
       sha: { required: true, type: string }
 permissions:
   contents: write
+  pull-requests: read
 concurrency:
   group: auto-post
   cancel-in-progress: false

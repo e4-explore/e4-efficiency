@@ -20,6 +20,7 @@ on:
 
 permissions:
   contents: write # read the repo + commit history.jsonl back
+  pull-requests: read # PR title/body give the post its "why" (best-effort)
 
 concurrency:
   group: auto-post

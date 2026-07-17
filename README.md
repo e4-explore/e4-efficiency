@@ -11,11 +11,16 @@ Built for builders who'd rather ship than tweet.
 When a commit lands on `main`:
 
 1. A GitHub Actions workflow fires.
-2. The workflow asks Gemini 2.5 Flash (free tier) to write a 1–2 sentence post
-   in the skill's hardcoded voice, plus pick the path on your deployed site
-   that best showcases the change.
-3. Playwright + Chromium screenshots that path.
-4. The screenshot is uploaded to X and the post is published with media attached.
+2. The workflow asks Gemini (free tier) to write a one-sentence post — what
+   changed + why it matters — in the skill's hardcoded voice, using the merged
+   PR's title/body and recent commit history for the "why", plus pick the paths
+   on your deployed site most likely to show the change.
+3. Playwright + Chromium screenshots those paths, and zooms into the changed
+   component when it can locate it (falling back to the full page).
+4. A vision pass verifies the image actually shows the change; if it doesn't,
+   the model maps the diff to the repo's route files to find where the change
+   renders and retries there.
+5. The image is uploaded to X and the post is published with media attached.
 
 ## Install
 
@@ -39,6 +44,7 @@ on:
       sha: { required: true, type: string }
 permissions:
   contents: write
+  pull-requests: read
 concurrency:
   group: auto-post
   cancel-in-progress: false
@@ -80,8 +86,10 @@ The voice is hardcoded inside `templates/post.mjs` — single voice for every
 project the skill is installed in, by design. Edit the `VOICE` constant in
 that file to change it for all future installs.
 
-Current voice: concise builder tone, 1–2 sentences, past tense, no hype words,
-no exclamation marks, ≤1 emoji, under 240 chars.
+Current voice: one casual sentence — what changed + why it matters ("Updated
+the bet record header since we're including MLS bets now") — past tense, no
+hype words, no exclamation marks, ≤1 emoji, under 280 chars (240 with the
+commit link enabled).
 
 ## What's in v1
 
@@ -96,6 +104,12 @@ no exclamation marks, ≤1 emoji, under 240 chars.
 - ✅ Optional deploy-gate: wait until the deploy serves the pushed commit
   before screenshotting (no stale-UI screenshots)
 - ✅ Multi-route screenshots with Gemini vision picking the most engaging shot
+- ✅ Element close-up: the diff is mapped to the changed component and the
+  screenshot zooms into it (full-page shot as fallback)
+- ✅ Vision verification: a shot that doesn't visibly show the change triggers
+  a widened route search over the repo's page files before falling back
+- ✅ PR title/body + recent commit subjects feed the draft, so the post can say
+  *why* a change matters, not just what it did
 - ✅ Editor pass: draft is critiqued against an engagement rubric and rewritten
 - ✅ Post history memory committed back (as a real identity, so Vercel doesn't
   block it) and fed into the prompt so hooks vary over time

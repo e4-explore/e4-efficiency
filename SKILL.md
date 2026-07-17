@@ -14,10 +14,12 @@ description: |
 A skill for builders who want their work to show up on social without lifting a
 finger. When merged to `main`, a GitHub Actions run:
 
-1. Pulls the merge commit and file diff.
+1. Pulls the merge commit and file diff, plus the merged PR's title/body and
+   recent commit subjects — that's where the "why" of a change lives.
 2. Asks Gemini (free tier, with a model-fallback chain so a retired model id
-   can't kill a run) to draft a post in a fixed builder voice and propose up to
-   3 routes likely to showcase the change visually.
+   can't kill a run) to draft a one-sentence post (what changed + why) in a
+   fixed builder voice, propose up to 3 routes likely to show the change, and
+   name the changed UI element for a zoomed-in shot.
 3. Gets an image (first available source wins):
    - a committed static `cover.png`, used verbatim; or
    - a **local preview build** — CI builds and serves the pushed code, then
@@ -25,7 +27,11 @@ finger. When merged to `main`, a GitHub Actions run:
    - the deployed site (optionally **deploy-gated**: wait until the deploy
      serves the pushed commit before screenshotting, so you never capture the
      old UI).
-   When multiple routes are shot, Gemini vision picks the most engaging one.
+   When multiple routes are shot, Gemini vision picks the most engaging one,
+   then the pipeline zooms into the changed component when it can locate it.
+   A vision check verifies the image actually shows the change; a miss
+   triggers one widened route search over the repo's page files before
+   falling back to the best full-page shot.
 4. Runs an editor pass: Gemini critiques the draft against an engagement rubric
    and the repo's recent post history (so hooks vary), then rewrites it.
 5. Uploads the image to X and posts the tweet with media attached.
@@ -68,6 +74,7 @@ the next run — no re-vendoring.
          sha: { required: true, type: string }
    permissions:
      contents: write
+     pull-requests: read
    concurrency:
      group: auto-post
      cancel-in-progress: false
@@ -148,10 +155,11 @@ so it screenshots production as-is.
 
 ## Voice
 
-Hardcoded in `post.mjs` (`buildVoice` + `RUBRIC`). Concise builder tone, 1–2
-sentences, past tense, no hype words, no exclamation marks, ≤1 emoji, under 280
-chars (240 if the commit link is enabled). Edit those to retune; the referenced
-action picks up the change on the next tag.
+Hardcoded in `post.mjs` (`buildVoice` + `RUBRIC`). One casual sentence — what
+changed + why it matters ("Updated the bet record header since we're including
+MLS bets now") — past tense, no hype words, no exclamation marks, ≤1 emoji,
+under 280 chars (240 if the commit link is enabled). Edit those to retune; the
+referenced action picks up the change on the next tag.
 
 ## Files in this skill
 
