@@ -15,11 +15,21 @@ A skill for builders who want their work to show up on social without lifting a
 finger. When merged to `main`, a GitHub Actions workflow:
 
 1. Pulls the merge commit, PR title/body, and file diff.
-2. Asks Gemini 2.5 Flash (free tier) to:
-   - Write a 1–2 sentence post in a fixed builder voice.
-   - Pick the path on the deployed site that best showcases the change.
-3. Screenshots that path with Playwright + Chromium.
-4. Uploads the screenshot to X and posts the tweet with media attached.
+2. Asks Gemini 2.5 Flash (free tier) to draft a post in a fixed builder voice
+   and propose up to 3 routes likely to showcase the change visually.
+3. Gets an image (first available source wins):
+   - a committed static `cover.png`, used verbatim; or
+   - a **local preview build** — CI builds and serves the pushed code, then
+     screenshots the candidate routes (image always matches the commit); or
+   - the deployed site at the repo's homepage URL.
+   When multiple routes were screenshotted, Gemini's vision looks at the
+   actual images and picks the most engaging one.
+4. Runs an editor pass: Gemini critiques the draft against an engagement
+   rubric and the repo's recent post history (so hooks and structure vary),
+   then rewrites it.
+5. Uploads the image to X and posts the tweet with media attached.
+6. Appends the post to `.github/auto-post/history.jsonl` and commits it back,
+   so every future run learns from what was already posted.
 
 No human approval step — it ships every merge. Voice is baked into this skill's
 prompt so it stays consistent across every project the skill is installed in.
@@ -62,14 +72,18 @@ voice, screenshot logic, etc.), edit the files this skill scaffolds —
    Note: X requires OAuth 1.0a user-context credentials to upload media and
    post on a user's behalf. Bearer tokens alone will not work.
 
-4. **Pick the image source:**
-   - **Live screenshot (default):** ask the user to set the repo's Homepage URL
+4. **Pick the image source** (priority order — first match wins):
+   - **Static cover:** commit a 1280×800 PNG at `.github/auto-post/cover.png`.
+     Used verbatim; nothing else needed. Best for repos with no UI.
+   - **Local preview build:** rename `.github/auto-post/config.example.json`
+     to `config.json` and set `preview.command` (build + serve) and
+     `preview.port`. CI builds the pushed code, serves it, screenshots the
+     candidate routes, and Gemini vision picks the best shot. Screenshots
+     always match the exact commit. Optional `routes` array helps Gemini
+     know which pages exist. Homepage URL not needed.
+   - **Deployed URL:** ask the user to set the repo's Homepage URL
      (Settings → top of General, "Website" field) to the deployed site. The
      workflow reads this field via the GitHub API; no extra config.
-   - **Static cover (no deployed UI):** for repos without a screenshot-able URL
-     (skills, libs, CLIs), ask the user to commit a 1280×800 PNG at
-     `.github/auto-post/cover.png`. When present, the workflow uses it
-     verbatim and skips the screenshot step entirely. Homepage URL not needed.
 
 5. **Commit and push** the new files. The next merge to `main` triggers
    the first auto-post.
@@ -100,16 +114,32 @@ Current voice:
 ## Files in this skill
 
 ```
-SKILL.md            ← this file
-README.md           ← human-facing overview + roadmap
-install.sh          ← copies templates into a target repo
+SKILL.md                ← this file
+README.md               ← human-facing overview + roadmap
+install.sh              ← copies templates into a target repo
 templates/
-  auto-post.yml     ← target: .github/workflows/auto-post.yml
-  post.mjs          ← target: .github/auto-post/post.mjs
-  package.json      ← target: .github/auto-post/package.json
+  auto-post.yml         ← target: .github/workflows/auto-post.yml
+  post.mjs              ← target: .github/auto-post/post.mjs
+  package.json          ← target: .github/auto-post/package.json
+  config.example.json   ← target: .github/auto-post/config.example.json
 docs/
-  setup.md          ← detailed setup walkthrough for end users
+  setup.md              ← detailed setup walkthrough for end users
 ```
+
+## How "learning" works (and its current limits)
+
+Two mechanisms, both at generation time:
+
+1. **Editor pass** — every draft is critiqued and rewritten against the
+   `RUBRIC` in `post.mjs` (lead with payoff, concrete over abstract, one
+   idea per post, vary structure).
+2. **Post history memory** — published posts are appended to
+   `.github/auto-post/history.jsonl` and committed back to the repo. The
+   editor sees the last 10 posts and is instructed not to repeat their
+   hooks or phrasing.
+
+What it does NOT do yet: learn from engagement (likes/impressions). That
+needs X analytics access beyond the free API tier — v2 candidate.
 
 ## Not in the thin slice (deliberately)
 
@@ -117,6 +147,7 @@ docs/
 - No commit-batching — one post per push to `main`, even if several commits
   land together.
 - No filter for chore/docs/dep-bump commits.
+- No engagement-based learning (see above).
 - Single X account per repo.
 - Single hardcoded voice.
 

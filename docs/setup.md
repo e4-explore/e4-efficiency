@@ -60,28 +60,69 @@ In the target repo on GitHub: **Settings → Secrets and variables → Actions
 
 ## 5. Pick an image source
 
-You have two options. Pick one.
+Three options, checked in this priority order — the first one configured wins.
 
-### Option A — Live screenshot of your deployed site (default)
+### Option A — Static cover image
 
-GitHub: **Settings → top of General → Website**. Paste the deployed URL of
-your project (e.g. `https://your-project.vercel.app`). The workflow reads
-this field via the GitHub API and uses it as the base for screenshots
-(Gemini picks the path per commit).
-
-### Option B — Static cover image (for repos with no deployed UI)
-
-If your project is a library, skill, CLI, or anything else without a URL
-worth screenshotting, drop a PNG at:
+Drop a PNG at:
 
 ```
 .github/auto-post/cover.png
 ```
 
-Recommended size: 1280×800. When this file exists, the workflow uses it
-verbatim and skips the screenshot step. The homepage URL is then optional.
+Recommended size: 1280×800. Used verbatim on every post; screenshot logic is
+skipped entirely. Best for libraries, CLIs, or anything without a UI.
 
-## 6. Commit and push
+### Option B — Local preview build (screenshots always match the commit)
+
+Rename `.github/auto-post/config.example.json` to `config.json` and fill in
+how to build and serve your app:
+
+```json
+{
+  "preview": {
+    "command": "npm ci && npm run build && npx serve -l 4173 dist",
+    "port": 4173,
+    "readyPath": "/",
+    "timeoutSeconds": 180
+  },
+  "routes": ["/", "/props", "/leaderboard"]
+}
+```
+
+CI runs `command` from the repo root, waits for `port` to answer on
+`readyPath`, then screenshots up to 3 candidate routes Gemini proposes from
+the diff (the optional `routes` list tells it which pages exist). Gemini's
+vision then looks at the actual screenshots and picks the most engaging one —
+preferring real content over empty states or generic landing pages.
+
+No deployed URL needed, and the screenshot reflects the exact pushed code
+rather than whatever happens to be deployed.
+
+### Option C — Screenshot the deployed site
+
+GitHub: **Settings → top of General → Website**. Paste the deployed URL of
+your project (e.g. `https://your-project.vercel.app`). Same multi-route +
+vision-pick flow as Option B, but against the live site. Note: if your
+deploy lags the merge, the screenshot may not show the new change yet —
+prefer Option B when that matters.
+
+## 6. How posts improve over time
+
+Two mechanisms are built in:
+
+- **Editor pass** — every draft is critiqued against an engagement rubric
+  (lead with the payoff, concrete over abstract, one idea per post) and
+  rewritten before posting. The rubric lives in `post.mjs` as `RUBRIC`.
+- **Post history memory** — each published post is appended to
+  `.github/auto-post/history.jsonl`, which the workflow commits back to
+  `main` (with a guard so it doesn't retrigger itself). The editor sees the
+  last 10 posts and avoids repeating their hooks and structure.
+
+To steer the style, edit `RUBRIC` or `VOICE` in `post.mjs` — or delete lines
+from `history.jsonl` if you want it to forget something.
+
+## 7. Commit and push
 
 ```bash
 git add .github
@@ -92,7 +133,7 @@ git push
 That push itself triggers the first run. Watch the Actions tab; if it
 succeeds, you'll see a tweet on your X account within ~1 minute.
 
-## 7. (Optional) Backfill posts for merges that already landed
+## 8. (Optional) Backfill posts for merges that already landed
 
 The workflow also supports manual runs, so you can post about a commit that
 was merged before you installed the auto-poster.
@@ -110,8 +151,17 @@ Repeat once per commit you want backfilled. There's no batch mode yet.
 
 ## Troubleshooting
 
-**Missing HOMEPAGE_URL error** — set the Website field (option A) OR commit
-a `.github/auto-post/cover.png` (option B).
+**Missing HOMEPAGE_URL error** — configure one of the three image sources:
+cover.png (option A), config.json preview (option B), or the Website field
+(option C).
+
+**"Preview server never became ready"** — the `preview.command` failed or the
+app listens on a different port than `preview.port`. Check the Action logs
+for the build output; bump `timeoutSeconds` for slow builds.
+
+**Wrong screenshot picked** — add or reorder entries in `config.json`'s
+`routes` list so Gemini knows the pages that exist, or tighten the pick
+prompt in `post.mjs`.
 
 **Gemini 429 errors** — you've hit the free-tier limit for the day; try again
 tomorrow, or upgrade the key.

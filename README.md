@@ -61,8 +61,12 @@ no exclamation marks, ≤1 emoji, under 240 chars.
 - ✅ Auto-posts (no review step)
 - ✅ Direct X API via OAuth 1.0a (supports media upload)
 - ✅ Gemini 2.5 Flash for text generation (free tier)
-- ✅ Screenshots a chosen subpath of the repo's homepage URL, OR uses a static
-  `.github/auto-post/cover.png` if committed (for repos without a deployed UI)
+- ✅ Three image sources (first match wins): static `cover.png` → local
+  preview build of the pushed code (`config.json`) → deployed homepage URL
+- ✅ Multi-route screenshots with Gemini vision picking the most engaging shot
+- ✅ Editor pass: draft is critiqued against an engagement rubric and rewritten
+- ✅ Post history memory: past posts committed to `history.jsonl` and fed back
+  into the prompt so hooks and structure vary over time
 - ✅ Single hardcoded voice
 
 ## What's deliberately not in the thin slice
@@ -73,6 +77,9 @@ an issue first.
 - Approval / draft queue
 - Commit batching ("merge 3 small fixes into one weekly post")
 - Batch backfill (post a range of commits in one run)
+- Engagement-based learning (likes/impressions feeding back into the prompt —
+  requires X analytics beyond the free API tier)
+- Screen recordings / video posts
 - Filtering chore/deps/docs commits
 - Multiple social platforms (Bluesky, Mastodon, LinkedIn)
 - Multiple X accounts per repo

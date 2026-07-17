@@ -3,6 +3,9 @@ name: Auto-post project update
 on:
   push:
     branches: [main]
+    # The history commit made by this workflow must not retrigger it.
+    paths-ignore:
+      - '.github/auto-post/history.jsonl'
   workflow_dispatch:
     inputs:
       sha:
@@ -11,20 +14,21 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write # read the repo + commit history.jsonl back
 
 concurrency:
-  group: auto-post-${{ github.event.inputs.sha || github.sha }}
+  group: auto-post
   cancel-in-progress: false
 
 jobs:
   post:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20 # local preview mode may run a full build
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          # Full history so the history.jsonl commit-back can rebase cleanly.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -46,7 +50,8 @@ jobs:
           HOMEPAGE=$(gh api repos/${{ github.repository }} -q .homepage)
           if [ "$HOMEPAGE" = "null" ]; then HOMEPAGE=""; fi
           echo "homepage=$HOMEPAGE" >> "$GITHUB_OUTPUT"
-          # post.mjs decides whether homepage URL is required (cover.png override skips it).
+          # post.mjs decides whether homepage URL is required
+          # (cover.png and config.json preview modes skip it).
 
       - name: Generate post and publish to X
         working-directory: .github/auto-post
@@ -64,3 +69,20 @@ jobs:
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
         run: node post.mjs
+
+      - name: Persist post history
+        if: success()
+        run: |
+          git config user.name "auto-post[bot]"
+          git config user.email "auto-post[bot]@users.noreply.github.com"
+          git add .github/auto-post/history.jsonl
+          if git diff --cached --quiet; then
+            echo "No history changes to commit."
+            exit 0
+          fi
+          git commit -m "chore(auto-post): record post history [skip ci]"
+          # main may have moved while this job ran; rebase our one commit onto
+          # its tip. Works from the detached HEAD that actions/checkout leaves.
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
