@@ -49,6 +49,12 @@ const GEMINI_MODELS = [
   'gemini-2.5-flash-lite',
 ];
 
+// Backoff schedule for transient 503s within a single model's attempts.
+// A run makes several gemini() calls (draft, vision pick, verification,
+// editor); kept short so repeated overload across calls can't blow past
+// the workflow's job timeout.
+const GEMINI_503_RETRY_DELAYS_MS = [2000, 5000];
+
 const RUBRIC = `
 Engagement rubric (what makes a post worth reading):
 - One sentence, one idea: the change plus the reason it matters, joined naturally.
@@ -134,14 +140,25 @@ export async function gemini(parts, { maxOutputTokens = 8192 } = {}) {
   let res;
   let lastErr = '';
   for (const model of GEMINI_MODELS) {
-    res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload },
-    );
+    // 503 means the model is transiently overloaded (Google's own wording:
+    // "high demand... usually temporary") — worth a couple of backed-off
+    // retries on the same model before writing it off. 404/400/other 5xx
+    // are not fixed by waiting, so those fall straight through.
+    for (let attempt = 0; ; attempt++) {
+      res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload },
+      );
+      if (res.ok) break;
+      lastErr = `${res.status} ${await res.text()}`;
+      if (res.status !== 503 || attempt >= GEMINI_503_RETRY_DELAYS_MS.length) break;
+      const delay = GEMINI_503_RETRY_DELAYS_MS[attempt];
+      console.warn(`Model ${model} overloaded (503); retrying in ${delay}ms.`);
+      await sleep(delay);
+    }
     if (res.ok) break;
-    lastErr = `${res.status} ${await res.text()}`;
     // 404/400 mean this model id is unavailable to this key — try the next one.
-    // Anything else (quota, auth, 5xx) is not fixed by switching models: stop.
+    // Anything else (quota, auth, persistent 5xx) is not fixed by switching models: stop.
     if (res.status !== 404 && res.status !== 400) break;
     console.warn(`Model ${model} unavailable (${res.status}); trying next.`);
   }
