@@ -155,9 +155,10 @@ so it screenshots production as-is.
 
 ## Voice
 
-Hardcoded in `post.mjs` (`buildVoice` + `RUBRIC`). One casual sentence — what
-changed + why it matters ("Updated the bet record header since we're including
-MLS bets now") — past tense, no hype words, no exclamation marks, ≤1 emoji,
+Hardcoded in `post.mjs` (`buildVoice` + `RUBRIC`). One statement — the
+feature/change itself, then why it matters ("'Create App' button — makes it
+faster to spin up a new project"), never narrated as "we did X" or
+"renamed/added/fixed X so Y". No hype words, no exclamation marks, ≤1 emoji,
 under 280 chars (240 if the commit link is enabled). Edit those to retune; the
 referenced action picks up the change on the next tag.
 

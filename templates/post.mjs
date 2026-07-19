@@ -58,9 +58,9 @@ const GEMINI_503_RETRY_DELAYS_MS = [2000, 5000];
 const RUBRIC = `
 Engagement rubric (what makes a post worth reading):
 - One sentence, one idea: the change plus the reason it matters, joined naturally.
-- The "why" is product value ("we're including MLS bets now"), never a restatement of the change ("to reflect broader coverage").
+- The "why" is product value ("MLS bets are in now"), never a restatement of the change ("to reflect broader coverage").
 - Concrete beats abstract: name the thing ("live odds now refresh every 30s"), never "improved performance".
-- Sound like a teammate mentioning what they shipped, not a changelog or a brand account.
+- State it as a fact about the product, not a narrated action: "'Create App' button — makes it faster to spin up a new project", not "We renamed the setup button to 'Create App' so it's easier to spin up a new project".
 - Vary structure against recent posts — if the last post opened with the feature name, don't do it again.
 `.trim();
 
@@ -70,15 +70,14 @@ function buildVoice(includeCommitLink) {
     : '- Under 280 characters total.';
   return `
 Voice rules (follow strictly):
-- Exactly one casual sentence: what changed + why, e.g. "Updated the bet record header since we're including MLS bets now".
-- Builder tone — a teammate mentioning what they shipped, not an announcement.
-- Past tense. Plain language. Never the changelog pattern "X now does Y to reflect Z".
+- Exactly one statement: name the feature/change itself, then the reason it matters. e.g. "'Create App' button — makes it faster to spin up a new project" rather than "We renamed the setup button to 'Create App' so it's easier to spin up a new project".
+- Never use "we", "our", or "I" as the sentence's subject, and never open with "We <verb>ed" or "Renamed/Added/Fixed X so Y" — state the fact, don't narrate the act of changing it.
+- Plain language. Never the changelog pattern "X now does Y to reflect Z".
 - No hype words: never "amazing", "exciting", "game-changer", "thrilled", "stoked", "huge", "massive".
 - No exclamation marks.
 - At most one fitting emoji (optional, skip if unsure).
 - No hashtags unless they genuinely add reach.
 ${limitLine}
-- Speak about the project in the third person or the work in the first-person plural ("we"), never "I".
 - If the change is purely internal/no user impact, say so plainly — don't pretend it's a feature.
 `.trim();
 }
@@ -579,7 +578,10 @@ Return ONLY a JSON object matching this exact schema (no prose):
       // the repo root).
       const browser = await chromium.launch();
       try {
-        const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+        // deviceScaleFactor 2 renders at retina resolution so element close-ups
+        // (often a fraction of the 1280px viewport) aren't upscaled blurry when
+        // X displays them larger in the timeline.
+        const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2 });
 
         const shots = await shootRoutes(ctx, baseUrl, candidates, 'r1');
         if (!shots.length) throw new Error('Every candidate screenshot failed.');

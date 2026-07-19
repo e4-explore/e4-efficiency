@@ -106,10 +106,11 @@ The voice is hardcoded inside `templates/post.mjs` — single voice for every
 project the skill is installed in, by design. Edit the `VOICE` constant in
 that file to change it for all future installs.
 
-Current voice: one casual sentence — what changed + why it matters ("Updated
-the bet record header since we're including MLS bets now") — past tense, no
-hype words, no exclamation marks, ≤1 emoji, under 280 chars (240 with the
-commit link enabled).
+Current voice: one statement — the feature/change itself, then why it matters
+("'Create App' button — makes it faster to spin up a new project"), never
+narrated as "we did X" or "renamed/added/fixed X so Y". No hype words, no
+exclamation marks, ≤1 emoji, under 280 chars (240 with the commit link
+enabled).
 
 ## What's in v1
 
