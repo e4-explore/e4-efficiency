@@ -16,6 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       sha: { required: true, type: string }
+      dry-run: { required: false, type: boolean, default: false }
 permissions:
   contents: write
   pull-requests: read
@@ -24,6 +25,8 @@ concurrency:
   cancel-in-progress: false
 jobs:
   post:
+    # `[skip post]` in a commit message skips the post for that commit only.
+    if: ${{ !contains(github.event.head_commit.message, '[skip post]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -41,7 +44,15 @@ jobs:
           include-commit-link: 'false'
           deploy-gate-health-url: https://your-app.example.com/api/health
           sha: ${{ github.event.inputs.sha }}
+          dry-run: ${{ github.event.inputs.dry-run }}
 ```
+
+**Suppress a single commit's post** with `[skip post]` in its message — handy
+for the commit that installs this workflow, so it doesn't post about itself.
+
+**Preview without publishing:** run the workflow manually with `dry-run: true`.
+The pipeline drafts + screenshots but skips the X publish and history write; the
+draft and image are written to the run's job summary.
 
 ## Inputs
 
@@ -61,6 +72,7 @@ jobs:
 | `history-commit-email` | no | `${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com` | Maps to a real, trusted deployer (matters for Vercel). |
 | `github-token` | no | `${{ github.token }}` | Reads commit context, pushes history. |
 | `sha` | no | `''` | Backfill a specific commit. Empty on push = the pushed commit. |
+| `dry-run` | no | `'false'` | Draft + screenshot only; skip the X publish and history write. Output goes to the job summary. |
 
 ## Consumer-side config (optional, committed in the consumer repo)
 

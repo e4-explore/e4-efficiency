@@ -42,6 +42,7 @@ on:
   workflow_dispatch:
     inputs:
       sha: { required: true, type: string }
+      dry-run: { required: false, type: boolean, default: false }
 permissions:
   contents: write
   pull-requests: read
@@ -50,6 +51,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   post:
+    # `[skip post]` in a commit message suppresses the post for that commit
+    # only — e.g. the commit that installs this workflow. Omit to post normally.
+    if: ${{ !contains(github.event.head_commit.message, '[skip post]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -66,9 +70,25 @@ jobs:
           routes: '["/", "/features"]'
           deploy-gate-health-url: https://your-app.example.com/api/health
           sha: ${{ github.event.inputs.sha }}
+          dry-run: ${{ github.event.inputs.dry-run }}
 ```
 
 Full input list: [`actions/auto-post/README.md`](actions/auto-post/README.md).
+
+**Landing the workflow without it posting about its own install commit:** put
+`[skip post]` in that commit's message (the `if:` guard above skips only that
+commit; `[skip post]` also works as a permanent per-commit opt-out).
+
+**Preview before going live:** trigger the workflow manually with
+`dry-run: true` — it drafts the post and screenshots the site but does not
+publish to X or write history; the draft + image show up in the run's job
+summary. Great for a first-time install once secrets are set.
+
+**Static sites (e.g. Storybook on Vercel):** there's no `/api/health`, so omit
+`deploy-gate-health-url`. `homepage-url` is the base origin and `routes` are
+paths appended to it — for a query-routed Storybook use
+`homepage-url: https://your-app.vercel.app` with
+`routes: '["/?path=/story/welcome--start"]'`.
 
 ### B. Vendored (self-contained)
 
