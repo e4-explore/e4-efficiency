@@ -118,7 +118,8 @@ jobs:
         run: node post.mjs
 
       - name: Persist post history
-        if: success()
+        # Skip in dry-run: nothing was posted, so there's no history to commit.
+        if: success() && github.event.inputs.dry-run != 'true'
         # Commit as the triggering actor's real github-noreply identity. A
         # fabricated bot identity can be rejected by deploy platforms that map
         # commit author → GitHub account (e.g. Vercel deploys it as "Blocked").

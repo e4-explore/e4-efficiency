@@ -137,7 +137,10 @@ runs:
       run: node "$GITHUB_ACTION_PATH/post.mjs"
 
     - name: Persist post history
-      if: success()
+      # Skip in dry-run: post.mjs writes no history.jsonl (nothing was posted),
+      # so there's nothing to commit — and the data dir may not even exist in
+      # referenced mode, which would make `git add` fail.
+      if: success() && inputs.dry-run != 'true'
       shell: bash
       working-directory: ${{ github.workspace }}
       env:
