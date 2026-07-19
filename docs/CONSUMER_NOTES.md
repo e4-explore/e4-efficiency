@@ -68,6 +68,30 @@ consumer changes — the whole point. The cost is trust: you run whatever `v1`
 currently points at. Anyone who wants reproducibility over auto-update can pin a
 SHA instead.
 
+## Public repos, secrets, and blast radius
+
+Making a consumer repo public does NOT expose Actions secrets — they're
+encrypted, never in the source, and masked (`***`) in logs. Fork PRs get no
+secrets, and this workflow only triggers on `push` to main and
+`workflow_dispatch` (collaborators only), so outsiders can't run it at all.
+What public DOES change:
+
+- **Actions logs become world-readable.** If a secret ever dodges masking
+  (base64, concatenation, a debug echo), it's public. Never print secrets.
+- **Never add `pull_request_target` or check out + execute untrusted PR code**
+  in a workflow on a public repo while secrets are in scope — that's the
+  classic exfiltration vector. This workflow deliberately has neither.
+
+Because one X/Gemini credential set is typically shared across every install,
+a leak in ANY repo burns them ALL — and the X tokens can post as you. So:
+
+- Scope org secrets to **Selected** private repos, not "all repositories",
+  if any repo in the org is public.
+- Give a public repo its own X app/token (and ideally its own Gemini key) so
+  a leak is contained to that one project.
+- On suspected exposure: rotate everywhere (X developer portal → regenerate;
+  Google AI Studio → new key).
+
 ## Trunk-based repos with a release bot
 
 If the consumer auto-releases on merge to `main`, `git pull --rebase` before
