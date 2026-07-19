@@ -76,14 +76,16 @@ jobs:
 
 Full input list: [`actions/auto-post/README.md`](actions/auto-post/README.md).
 
-**Always pass `before-sha: ${{ github.event.before }}`.** Without it, a push
-that lands as a merge commit — e.g. a rejected push resolved with `git pull`
-instead of `git pull --rebase`, or a GitHub-UI "Create a merge commit" PR
-merge — can draft about whatever was already on the branch instead of the
-work actually being pushed (GitHub's single-commit diff for a merge commit
-reflects its second parent, not the pushed branch's own changes). Passing
-`before-sha` makes the action diff the true net change of the whole push
-instead.
+**Always pass `before-sha: ${{ github.event.before }}`.** GitHub's single-commit
+diff for a merge commit is always computed against its *first* parent, so only
+content unique to the *second* parent shows up. A `git pull`-created merge
+commit (resolving a rejected push) typically puts your own unpublished work as
+the first parent — since it's on the branch you had checked out — and the
+freshly-fetched remote commit as the second, so the diff shows the remote's
+content, not yours. (A normal feature-branch or PR merge, where `main` is
+first parent and the feature branch is second, usually isn't affected the same
+way.) `before-sha` removes the ambiguity entirely by diffing the whole push's
+true net range instead of relying on parent order.
 
 **Landing the workflow without it posting about its own install commit:** put
 `[skip post]` in that commit's message (the `if:` guard above skips only that

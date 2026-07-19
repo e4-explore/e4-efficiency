@@ -152,14 +152,24 @@ describes the merge mechanically, not the actual change.
    clean fast-forward. This is the zero-risk habit fix; `git config pull.rebase
    true` (repo or global) makes it the default so you can't forget.
 2. **Pass `before-sha: ${{ github.event.before }}`** in the caller workflow (see
-   the README example — do this regardless of #1, since it also protects
-   against GitHub-UI "Create a merge commit" PR merges and any
-   collaborator who doesn't rebase). With it, the action diffs
+   the README example — do this regardless of #1, since it's a safety net for
+   any collaborator who doesn't rebase). With it, the action diffs
    `before-sha...sha` — the true net change of the whole push — instead of the
    single pushed commit's diff, so a merge commit can't hide the real change
    behind whatever was already on the branch. Empty/absent (e.g.
    `workflow_dispatch` backfill, which has no "before") falls back to the old
    single-commit behavior.
+   (A normal feature-branch or GitHub-UI PR merge, where `main` is first
+   parent and the feature branch is second, is usually fine either way — the
+   feature's real content IS the second parent there. This bug specifically
+   bites when your own unpublished work ends up as first parent, which is what
+   `git pull` on your own branch does.)
+
+**Verified against real history:** confirmed on an actual merge commit in this
+repo (`git diff --stat <first-parent> <merge-commit>`) that the first-parent's
+own content shows zero net diff — only the other parent's content appears,
+exactly as described above — and that GitHub's compare API correctly returns
+the union of both sides' commits and files instead.
 
 ---
 

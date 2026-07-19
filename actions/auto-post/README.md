@@ -56,12 +56,15 @@ The pipeline drafts + screenshots but skips the X publish and history write; the
 draft and image are written to the run's job summary.
 
 **Always pass `before-sha: ${{ github.event.before }}`.** GitHub's single-commit
-diff for a merge commit reflects its *second* parent, not the first — so a push
-that lands as a merge (a rejected push resolved with `git pull` instead of
-`git pull --rebase`, or a GitHub-UI "Create a merge commit" PR merge) can draft
-about whatever was already on the branch instead of the work being pushed.
-`before-sha` makes the action diff `before...after` instead — the true net
-change of the whole push, regardless of merges.
+diff for a merge commit is always computed against its *first* parent, so only
+content unique to the *second* parent shows up. A `git pull`-created merge
+commit (resolving a rejected push) typically puts your own unpublished work as
+the first parent and the freshly-fetched remote commit as the second, so the
+diff shows the remote's content, not yours. (A normal feature-branch or PR
+merge, where `main` is first parent and the feature branch is second, usually
+isn't affected the same way.) `before-sha` makes the action diff
+`before...after` instead — the true net change of the whole push, regardless
+of parent order.
 
 ## Inputs
 
