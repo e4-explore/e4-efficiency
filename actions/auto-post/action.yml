@@ -64,7 +64,7 @@ inputs:
     required: false
     default: ''
   before-sha:
-    description: 'Branch tip before this push (pass ${{ github.event.before }}). Used to diff the true net change instead of the single pushed commit''s diff — fixes merge commits (e.g. a rejected push resolved with `git pull` instead of `git pull --rebase`) showing whatever was already on the branch instead of the actual work being pushed. Leave empty to fall back to the single-commit diff (e.g. workflow_dispatch backfill, which has no "before").'
+    description: 'Branch tip before this push (pass the push event''s before field). Used to diff the true net change instead of the single pushed commit''s diff — fixes merge commits (e.g. a rejected push resolved with `git pull` instead of `git pull --rebase`) showing whatever was already on the branch instead of the actual work being pushed. Leave empty to fall back to the single-commit diff (e.g. workflow_dispatch backfill, which has no "before").'
     required: false
     default: ''
   dry-run:
