@@ -23,6 +23,36 @@ done
 Consider folding this into `install.sh` (guarded by `command -v gh`) so the
 vendored path is one command end-to-end.
 
+### Finding the right values on X's Developer Console
+
+The X Developer Console shows **two separate credential sets** on the same
+"Keys & Tokens" page for an app, and it's easy to grab the wrong one:
+
+| Repo secret | Console field | Where |
+|---|---|---|
+| `X_API_KEY` | **OAuth 1.0 → Consumer Key** | top of the "OAuth 1.0 Keys" box |
+| `X_API_SECRET` | **OAuth 1.0 → Consumer Secret** | paired with Consumer Key, under the same "Show" |
+| `X_ACCESS_TOKEN` | **OAuth 1.0 → Access Token** | click "Generate" if it isn't already |
+| `X_ACCESS_TOKEN_SECRET` | **OAuth 1.0 → Access Token Secret** | generated at the same moment as the Access Token, shown once |
+| `GEMINI_API_KEY` | not on this page — [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | separate service entirely |
+
+**Ignore the "OAuth 2.0 Keys" box** (Client ID / Client Secret) — `post.mjs`
+authenticates via `twitter-api-v2` using OAuth 1.0a only, so the OAuth 2.0
+values are a red herring here and won't work if pasted in by mistake.
+
+Gotchas when generating the Access Token:
+- If the "Access Token" row still shows **"Generate"** (not "Regenerate"), no
+  token exists yet for this app — any value already sitting in the
+  `X_ACCESS_TOKEN*` repo secrets predates it and should be treated as stale.
+- The token is shown **exactly once**. Copy both the Access Token and Access
+  Token Secret into the repo secrets immediately — there's no way to view
+  them again after navigating away; you'd have to regenerate.
+- The token binds to whichever X account is logged into that browser session
+  at generate-time (shown as "For @handle" next to the button) — log into the
+  account you actually want posting *before* clicking Generate, not after.
+- The app must have **Read and write** permissions, or the tweet publish
+  step (and the media upload before it) will fail with a 403.
+
 ## Don't post about the install commit
 
 Adding the workflow is itself a push to `main`, so without a guard the poster's
