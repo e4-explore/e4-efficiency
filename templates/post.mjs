@@ -378,6 +378,8 @@ async function main() {
   // --- resolve config: env (action inputs) overrides config.json ---
 
   const includeCommitLink = envBool('INCLUDE_COMMIT_LINK', config.includeCommitLink ?? false);
+  // Dry run: run the whole pipeline but skip the actual X publish + history write.
+  const DRY_RUN = envBool('DRY_RUN', false);
 
   let routes = Array.isArray(config.routes) ? config.routes : undefined;
   if (process.env.ROUTES && process.env.ROUTES.trim()) {
@@ -676,43 +678,64 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
     }
     console.log('Final post:', finalText);
 
-    const { TwitterApi } = await import('twitter-api-v2');
-    const twitter = new TwitterApi({
-      appKey: X_API_KEY,
-      appSecret: X_API_SECRET,
-      accessToken: X_ACCESS_TOKEN,
-      accessSecret: X_ACCESS_TOKEN_SECRET,
-    });
+    if (DRY_RUN) {
+      // Preview mode: everything ran except the publish. Nothing is written to
+      // history (so no commit-back), and the draft + image are surfaced in the
+      // job summary for review.
+      console.log(`DRY RUN — not publishing to X. Would post with image: ${imageNote}`);
+      const summary = process.env.GITHUB_STEP_SUMMARY;
+      if (summary) {
+        writeFileSync(
+          summary,
+          [
+            '### Auto-post dry run (nothing published)',
+            '',
+            `**Would tweet:** ${finalText}`,
+            `**Image:** ${imageNote}`,
+            '',
+          ].join('\n'),
+          { flag: 'a' },
+        );
+      }
+    } else {
+      const { TwitterApi } = await import('twitter-api-v2');
+      const twitter = new TwitterApi({
+        appKey: X_API_KEY,
+        appSecret: X_API_SECRET,
+        accessToken: X_ACCESS_TOKEN,
+        accessSecret: X_ACCESS_TOKEN_SECRET,
+      });
 
-    const mediaId = await twitter.v1.uploadMedia(imagePath, { mimeType: 'image/png' });
-    const tweet = await twitter.v2.tweet({ text: finalText, media: { media_ids: [mediaId] } });
-    console.log('Posted tweet id:', tweet.data.id);
+      const mediaId = await twitter.v1.uploadMedia(imagePath, { mimeType: 'image/png' });
+      const tweet = await twitter.v2.tweet({ text: finalText, media: { media_ids: [mediaId] } });
+      console.log('Posted tweet id:', tweet.data.id);
 
-    // Record for future runs (the workflow commits this file back to the repo).
-    // Ensure the data dir exists — a referenced-model consumer may configure
-    // everything via inputs and have no .github/auto-post/ directory yet.
-    mkdirSync(dirname(HISTORY_PATH), { recursive: true });
-    appendFileSync(HISTORY_PATH, JSON.stringify({
-      sha: GITHUB_SHA,
-      tweet_id: tweet.data.id,
-      text: finalText,
-      image: imageNote,
-    }) + '\n');
+      // Record for future runs (the workflow commits this file back to the repo).
+      // Ensure the data dir exists — a referenced-model consumer may configure
+      // everything via inputs and have no .github/auto-post/ directory yet.
+      mkdirSync(dirname(HISTORY_PATH), { recursive: true });
+      appendFileSync(HISTORY_PATH, JSON.stringify({
+        sha: GITHUB_SHA,
+        tweet_id: tweet.data.id,
+        text: finalText,
+        image: imageNote,
+      }) + '\n');
 
-    const summary = process.env.GITHUB_STEP_SUMMARY;
-    if (summary) {
-      writeFileSync(
-        summary,
-        [
-          '### Auto-post published',
-          '',
-          `**Tweet:** ${finalText}`,
-          `**Image:** ${imageNote}`,
-          `**Tweet id:** ${tweet.data.id}`,
-          '',
-        ].join('\n'),
-        { flag: 'a' },
-      );
+      const summary = process.env.GITHUB_STEP_SUMMARY;
+      if (summary) {
+        writeFileSync(
+          summary,
+          [
+            '### Auto-post published',
+            '',
+            `**Tweet:** ${finalText}`,
+            `**Image:** ${imageNote}`,
+            `**Tweet id:** ${tweet.data.id}`,
+            '',
+          ].join('\n'),
+          { flag: 'a' },
+        );
+      }
     }
   } finally {
     if (previewProc && previewProc.pid) {

@@ -17,6 +17,11 @@ on:
         description: 'Commit SHA to post about (for backfilling a merge that already landed).'
         required: true
         type: string
+      dry-run:
+        description: 'Run the pipeline (draft + screenshot) but do NOT publish to X. Preview in the job summary.'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write # read the repo + commit history.jsonl back
@@ -28,6 +33,10 @@ concurrency:
 
 jobs:
   post:
+    # `[skip post]` in a commit message suppresses the post for that commit only
+    # (e.g. the commit that installs this workflow). head_commit is null on
+    # workflow_dispatch, so contains() is false there and backfill still runs.
+    if: ${{ !contains(github.event.head_commit.message, '[skip post]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25 # deploy-gate can wait up to 12 min for a deploy
     steps:
@@ -96,6 +105,8 @@ jobs:
           GITHUB_SHA: ${{ github.event.inputs.sha || github.sha }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
           TRIGGER: ${{ github.event_name }}
+          # Preview without publishing: run with workflow_dispatch dry-run=true.
+          DRY_RUN: ${{ github.event.inputs.dry-run }}
           HOMEPAGE_URL: ${{ steps.meta.outputs.homepage }}
           # Optional: set repo variable INCLUDE_COMMIT_LINK=true to append the commit URL.
           INCLUDE_COMMIT_LINK: ${{ vars.INCLUDE_COMMIT_LINK }}
