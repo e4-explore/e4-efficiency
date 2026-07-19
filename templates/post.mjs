@@ -370,6 +370,7 @@ async function main() {
     GITHUB_TOKEN,
     GITHUB_REPOSITORY,
     GITHUB_SHA,
+    GITHUB_BEFORE_SHA,
     GITHUB_SERVER_URL,
     HOMEPAGE_URL,
     GEMINI_API_KEY,
@@ -439,13 +440,52 @@ async function main() {
 
   const commitMessage = commit.commit?.message ?? '';
   const author = commit.author?.login ?? commit.commit?.author?.name ?? 'unknown';
-  const files = (commit.files ?? []).slice(0, 25).map((f) => ({
+  let files = (commit.files ?? []).slice(0, 25).map((f) => ({
     filename: f.filename,
     status: f.status,
     additions: f.additions,
     deletions: f.deletions,
     patch: typeof f.patch === 'string' ? f.patch.slice(0, 1500) : undefined,
   }));
+
+  // A merge commit's diff above (vs its first parent, per the single-commit
+  // endpoint) reflects whichever side WASN'T already on the branch — e.g. a
+  // push rejected for being behind, then resolved with `git pull` (merge, not
+  // rebase), makes the diff show the REMOTE's commit, not the local work
+  // being pushed (the local work is already "in" the first parent, so it
+  // contributes no visible diff there). When we know the branch tip before
+  // this push (BEFORE_SHA, from the push event's github.event.before),
+  // compare before...after instead — the true net diff of the push,
+  // regardless of merges or how many commits it bundles. Falls back to the
+  // single-commit diff above when unavailable (e.g. workflow_dispatch
+  // backfill has no "before").
+  let pushCommits = [];
+  const validBeforeSha = GITHUB_BEFORE_SHA && !/^0+$/.test(GITHUB_BEFORE_SHA);
+  if (validBeforeSha) {
+    try {
+      const cmpRes = await fetch(
+        `https://api.github.com/repos/${GITHUB_REPOSITORY}/compare/${GITHUB_BEFORE_SHA}...${GITHUB_SHA}`,
+        { headers: ghHeaders },
+      );
+      if (cmpRes.ok) {
+        const cmp = await cmpRes.json();
+        if (Array.isArray(cmp.files) && cmp.files.length) {
+          files = cmp.files.slice(0, 25).map((f) => ({
+            filename: f.filename,
+            status: f.status,
+            additions: f.additions,
+            deletions: f.deletions,
+            patch: typeof f.patch === 'string' ? f.patch.slice(0, 1500) : undefined,
+          }));
+        }
+        pushCommits = (cmp.commits ?? [])
+          .map((c) => (c.commit?.message ?? '').split('\n')[0])
+          .filter(Boolean);
+      }
+    } catch (err) {
+      console.warn(`Compare fetch failed: ${err.message}`);
+    }
+  }
 
   // The "why" of a change usually lives in the PR, not the merge commit.
   // Best-effort: pushes that didn't come through a PR just skip this.
@@ -486,6 +526,9 @@ async function main() {
   const prBlock = pr
     ? `\nPULL REQUEST (usually says why the change was made)\n- Title: ${pr.title}\n- Body (truncated): ${pr.body || '(empty)'}\n`
     : '';
+  const pushBlock = pushCommits.length
+    ? `\nCOMMITS ACTUALLY INCLUDED IN THIS PUSH (a push can bundle multiple commits — e.g. a routine merge — so this list plus the diff above is the ground truth for what changed; the single "Message" above may just be a generic "Merge branch..." message with no real content, ignore it if so):\n${pushCommits.map((s) => `- ${s}`).join('\n')}\n`
+    : '';
   const recentBlock = recentSubjects.length
     ? `\nRECENT COMMITS, oldest first (the arc of work — mine these for why this change matters):\n${recentSubjects.map((s) => `- ${s}`).join('\n')}\n`
     : '';
@@ -513,7 +556,7 @@ COMMIT
 - Author: ${author}
 - Files changed (truncated):
 ${JSON.stringify(files, null, 2)}
-${prBlock}${recentBlock}
+${pushBlock}${prBlock}${recentBlock}
 TASK
 Return ONLY a JSON object matching this exact schema (no prose):
 {

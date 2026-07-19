@@ -22,6 +22,11 @@ on:
         required: false
         default: false
         type: boolean
+      before-sha:
+        description: 'Optional: diff against this SHA instead of the single commit at `sha` (for backfilling a merge commit correctly, or testing). Leave empty to use the single-commit diff.'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: write # read the repo + commit history.jsonl back
@@ -103,6 +108,9 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           # workflow_dispatch input wins if present (backfill mode); otherwise the push SHA.
           GITHUB_SHA: ${{ github.event.inputs.sha || github.sha }}
+          # Explicit dispatch input wins (manual backfill/test); otherwise the
+          # push event's own "before" (empty on workflow_dispatch, which has none).
+          GITHUB_BEFORE_SHA: ${{ github.event.inputs.before-sha || github.event.before }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
           TRIGGER: ${{ github.event_name }}
           # Preview without publishing: run with workflow_dispatch dry-run=true.

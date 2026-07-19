@@ -126,6 +126,40 @@ a leak in ANY repo burns them ALL — and the X tokens can post as you. So:
 
 If the consumer auto-releases on merge to `main`, `git pull --rebase` before
 pushing the install commit or the push is rejected by the bot's version bump.
+This isn't just install-day hygiene — see the next section for what happens if
+you resolve a rejected push with `git pull` (merge) instead.
+
+## Merge commits can make the post about the wrong thing
+
+Symptom: you push local work, GitHub rejects it ("fetch first" — something
+landed on `main` since you last pulled, e.g. this repo's own release bot or
+history-commit-back), you run `git pull` to fetch + combine, push again — and
+the resulting post describes something generic/technical (a version bump, a
+dependency cleanup) instead of the feature you actually pushed.
+
+**Why:** GitHub's single-commit API diffs a merge commit against its *first*
+parent. `git pull` (merge, not rebase) makes your prior local work the first
+parent and the newly-fetched remote commit the second parent — so the diff the
+action sees is the remote's change, not yours (your work was already "in" the
+first parent, so it shows zero net diff there). The merge commit's
+auto-generated message ("Merge branch 'main' of ...") doesn't help either — it
+describes the merge mechanically, not the actual change.
+
+**Two fixes, both worth having:**
+1. **`git pull --rebase`, not `git pull`.** Replays your commit on top of the
+   fetched one instead of merging — no merge commit is created at all, so
+   there's nothing for the diff-direction bug to trigger on. Push becomes a
+   clean fast-forward. This is the zero-risk habit fix; `git config pull.rebase
+   true` (repo or global) makes it the default so you can't forget.
+2. **Pass `before-sha: ${{ github.event.before }}`** in the caller workflow (see
+   the README example — do this regardless of #1, since it also protects
+   against GitHub-UI "Create a merge commit" PR merges and any
+   collaborator who doesn't rebase). With it, the action diffs
+   `before-sha...sha` — the true net change of the whole push — instead of the
+   single pushed commit's diff, so a merge commit can't hide the real change
+   behind whatever was already on the branch. Empty/absent (e.g.
+   `workflow_dispatch` backfill, which has no "before") falls back to the old
+   single-commit behavior.
 
 ---
 

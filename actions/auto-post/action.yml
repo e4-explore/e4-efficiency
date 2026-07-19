@@ -63,6 +63,10 @@ inputs:
     description: 'Commit SHA to post about (backfill). Leave empty on push events to use the pushed commit.'
     required: false
     default: ''
+  before-sha:
+    description: 'Branch tip before this push (pass ${{ github.event.before }}). Used to diff the true net change instead of the single pushed commit''s diff — fixes merge commits (e.g. a rejected push resolved with `git pull` instead of `git pull --rebase`) showing whatever was already on the branch instead of the actual work being pushed. Leave empty to fall back to the single-commit diff (e.g. workflow_dispatch backfill, which has no "before").'
+    required: false
+    default: ''
   dry-run:
     description: 'When "true", run the whole pipeline (draft + screenshot) but do NOT publish to X or write history. The drafted text and image are logged to the job summary. Use it to preview voice/screenshots before wiring to real merges.'
     required: false
@@ -122,6 +126,7 @@ runs:
         GITHUB_REPOSITORY: ${{ github.repository }}
         # Backfill SHA input wins if present; otherwise the pushed commit.
         GITHUB_SHA: ${{ inputs.sha != '' && inputs.sha || github.sha }}
+        GITHUB_BEFORE_SHA: ${{ inputs.before-sha }}
         GITHUB_SERVER_URL: ${{ github.server_url }}
         TRIGGER: ${{ github.event_name }}
         DRY_RUN: ${{ inputs.dry-run }}

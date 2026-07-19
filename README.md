@@ -70,10 +70,20 @@ jobs:
           routes: '["/", "/features"]'
           deploy-gate-health-url: https://your-app.example.com/api/health
           sha: ${{ github.event.inputs.sha }}
+          before-sha: ${{ github.event.before }}
           dry-run: ${{ github.event.inputs.dry-run }}
 ```
 
 Full input list: [`actions/auto-post/README.md`](actions/auto-post/README.md).
+
+**Always pass `before-sha: ${{ github.event.before }}`.** Without it, a push
+that lands as a merge commit — e.g. a rejected push resolved with `git pull`
+instead of `git pull --rebase`, or a GitHub-UI "Create a merge commit" PR
+merge — can draft about whatever was already on the branch instead of the
+work actually being pushed (GitHub's single-commit diff for a merge commit
+reflects its second parent, not the pushed branch's own changes). Passing
+`before-sha` makes the action diff the true net change of the whole push
+instead.
 
 **Landing the workflow without it posting about its own install commit:** put
 `[skip post]` in that commit's message (the `if:` guard above skips only that
