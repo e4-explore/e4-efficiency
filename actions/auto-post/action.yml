@@ -126,6 +126,7 @@ runs:
         exit 1
 
     - name: Generate post and publish to X
+      id: post
       shell: bash
       working-directory: ${{ github.workspace }}
       env:
@@ -150,6 +151,17 @@ runs:
         X_ACCESS_TOKEN: ${{ inputs.x-access-token }}
         X_ACCESS_TOKEN_SECRET: ${{ inputs.x-access-token-secret }}
       run: node "$GITHUB_ACTION_PATH/post.mjs"
+
+    # Dry-run only: GITHUB_STEP_SUMMARY is text-only, so the chosen image can't
+    # ride along in it — upload the actual PNG (an absolute path on the runner,
+    # written by post.mjs to $GITHUB_OUTPUT) as a downloadable artifact instead.
+    - name: Upload dry-run preview image
+      if: success() && inputs.dry-run == 'true' && steps.post.outputs.image_path != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: auto-post-dry-run-preview
+        path: ${{ steps.post.outputs.image_path }}
+        retention-days: 7
 
     - name: Persist post history
       # Skip in dry-run: post.mjs writes no history.jsonl (nothing was posted),

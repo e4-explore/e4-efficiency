@@ -102,6 +102,7 @@ jobs:
           exit 1
 
       - name: Generate post and publish to X
+        id: post
         working-directory: .github/auto-post
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -130,6 +131,18 @@ jobs:
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
         run: node post.mjs
+
+      # Dry-run only: GITHUB_STEP_SUMMARY is text-only, so the chosen image
+      # can't ride along in it — upload the actual PNG (an absolute path on
+      # the runner, written by post.mjs to $GITHUB_OUTPUT) as a downloadable
+      # artifact instead.
+      - name: Upload dry-run preview image
+        if: success() && github.event.inputs.dry-run == 'true' && steps.post.outputs.image_path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto-post-dry-run-preview
+          path: ${{ steps.post.outputs.image_path }}
+          retention-days: 7
 
       - name: Persist post history
         # Skip in dry-run: nothing was posted, so there's no history to commit.

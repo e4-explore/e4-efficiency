@@ -955,8 +955,13 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
     if (DRY_RUN) {
       // Preview mode: everything ran except the publish. Nothing is written to
       // history (so no commit-back), and the draft + image are surfaced in the
-      // job summary for review.
+      // job summary for review. The image itself is exposed as a step output
+      // (an absolute path on the runner) so the caller workflow can upload it
+      // as a downloadable artifact — GITHUB_STEP_SUMMARY is text-only, it
+      // can't carry the actual PNG off the ephemeral runner.
       console.log(`DRY RUN — not publishing to X. Would post with image: ${imageNote}`);
+      const output = process.env.GITHUB_OUTPUT;
+      if (output) appendFileSync(output, `image_path=${imagePath}\n`);
       const summary = process.env.GITHUB_STEP_SUMMARY;
       if (summary) {
         writeFileSync(
@@ -966,6 +971,7 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
             '',
             `**Would tweet:** ${finalText}`,
             `**Image:** ${imageNote}`,
+            '**Preview:** download the `auto-post-dry-run-preview` artifact from this run (Summary tab, bottom of page).',
             '',
           ].join('\n'),
           { flag: 'a' },
