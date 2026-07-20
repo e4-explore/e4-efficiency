@@ -29,9 +29,15 @@ finger. When merged to `main`, a GitHub Actions run:
      old UI).
    When multiple routes are shot, Gemini vision picks the most engaging one,
    then the pipeline zooms into the changed component when it can locate it.
-   A vision check verifies the image actually shows the change; a miss
-   triggers one widened route search over the repo's page files before
-   falling back to the best full-page shot.
+   It can also *drive* the page — a bounded, vision-guided loop that clicks/
+   hovers/selects navigational and display controls (open a screen, switch to
+   a branded theme, open a menu), capturing a frame per step — and picks the
+   best of the full page, the close-up, and those frames. Interaction is
+   safety-gated (never mutating/financial/account/send actions), on by
+   default, and steerable per repo via `interaction-hints`. A vision check
+   verifies the image actually shows the change; a miss triggers one widened
+   route search over the repo's page files before falling back to the best
+   full-page shot.
 4. Runs an editor pass: Gemini critiques the draft against an engagement rubric
    and the repo's recent post history (so hooks vary), then rewrites it.
 5. Uploads the image to X and posts the tweet with media attached.

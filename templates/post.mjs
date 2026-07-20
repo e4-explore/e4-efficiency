@@ -336,6 +336,188 @@ Return ONLY JSON: { "shows_change": boolean, "reason": string }`,
   }
 }
 
+// ---------------------------------------------------------------- interactive browse
+
+// This site is driven UNATTENDED and the result is posted PUBLICLY, so the
+// browse loop must never trigger a mutating, financial, account, or outward-
+// send action. Any offered element whose accessible name matches this is
+// removed from the action set the model can pick from. Deliberately does NOT
+// block navigational/display toggles like "Apply theme", tabs, or menus —
+// those are exactly what produce a compelling shot.
+const UNSAFE_ACTION_NAME = /\b(delete|remove|discard|destroy|erase|deactivate|pay|buy|purchase|checkout|order|subscribe|unsubscribe|withdraw|transfer|deposit|log\s?out|sign\s?out|reset password|delete account|confirm payment|send (message|email|invite)|publish|new comment|post comment)\b/i;
+
+// Tags visible interactive elements across the page's same-origin frames with a
+// data attribute and returns a compact list the model can pick from by `ref`.
+// Re-run every step because acting on the page changes the DOM. Storybook is
+// the motivating case: the sidebar nav and theme toolbar live in the top
+// frame, story internals in a child iframe — both are covered.
+async function snapshotInteractives(page) {
+  const tagger = (frameIndex) => {
+    const SEL = 'a,button,select,summary,[role=button],[role=tab],[role=menuitem],[role=menuitemradio],[role=switch],[role=link],[role=option],[aria-haspopup]';
+    const items = [];
+    let i = 0;
+    for (const el of document.querySelectorAll(SEL)) {
+      const r = el.getBoundingClientRect();
+      const st = getComputedStyle(el);
+      const visible = r.width > 2 && r.height > 2 && r.bottom > 0 && r.top < innerHeight
+        && r.right > 0 && r.left < innerWidth
+        && st.visibility !== 'hidden' && st.display !== 'none' && st.pointerEvents !== 'none';
+      if (!visible) continue;
+      const name = (el.getAttribute('aria-label') || el.innerText || el.value || el.getAttribute('title') || '')
+        .trim().replace(/\s+/g, ' ').slice(0, 80);
+      if (!name) continue;
+      el.setAttribute('data-autopost-ref', `${frameIndex}:${i}`);
+      const item = { ref: `${frameIndex}:${i}`, tag: el.tagName.toLowerCase(), role: el.getAttribute('role') || null, name };
+      if (el.tagName === 'SELECT') item.options = [...el.options].map((o) => o.value).slice(0, 12);
+      items.push(item);
+      if (++i >= 50) break;
+    }
+    return items;
+  };
+
+  const frames = page.frames();
+  const all = [];
+  for (let f = 0; f < frames.length; f++) {
+    try {
+      const items = await frames[f].evaluate(tagger, f);
+      all.push(...items);
+    } catch { /* cross-origin or detached frame — skip */ }
+    if (all.length >= 80) break;
+  }
+  return all;
+}
+
+function refLocator(page, ref) {
+  const frameIndex = Number(String(ref).split(':')[0]);
+  const frame = page.frames()[frameIndex];
+  if (!frame) return null;
+  return frame.locator(`[data-autopost-ref="${ref}"]`).first();
+}
+
+// Bounded, vision-driven interaction loop. Starting from a landing URL, lets
+// the model click/hover/select its way toward the most compelling state
+// (branded theme, composed screen, an opened menu…), capturing a frame after
+// every step. Returns the single best frame it saw, or null to fall back to
+// the plain route/close-up shots. Every failure degrades gracefully; the loop
+// is hard-bounded on steps and wall-clock so it can't hang the CI job.
+async function browseForBestFrame(ctx, startUrl, { postText, commitMessage, interactionHints, maxSteps = 5, wallClockMs = 90_000 }) {
+  const page = await ctx.newPage();
+  const frames = [];
+  const history = [];
+  const deadline = Date.now() + wallClockMs;
+  try {
+    await page.goto(startUrl, { waitUntil: 'networkidle', timeout: 30_000 }).catch(async () => {
+      await page.goto(startUrl, { waitUntil: 'load', timeout: 30_000 });
+    });
+
+    const capture = async (label) => {
+      const file = join(tmpdir(), `auto-post-frame-${frames.length}.png`);
+      await page.screenshot({ path: file, fullPage: false });
+      frames.push({ file, label });
+    };
+    await capture('initial landing');
+
+    const hintLine = interactionHints ? `\nOWNER HINTS (prefer these): ${interactionHints}` : '';
+
+    for (let step = 0; step < maxSteps && Date.now() < deadline; step++) {
+      const all = await snapshotInteractives(page);
+      const offered = all.filter((it) => !UNSAFE_ACTION_NAME.test(it.name)).slice(0, 40);
+      if (!offered.length) break;
+
+      const shot = frames[frames.length - 1];
+      let decision;
+      try {
+        decision = await gemini([
+          {
+            text: `You are driving a real web page to capture the most compelling screenshot for this social post. You may click/hover/select navigational and display controls to reach a better state (e.g. open the right screen, switch to a branded/non-wireframe theme, open a menu). Do NOT try to submit forms, buy, delete, or send anything.
+
+POST DRAFT: ${postText}
+COMMIT MESSAGE: ${commitMessage}${hintLine}
+
+ACTIONS SO FAR: ${history.length ? history.join(' | ') : '(none yet)'}
+
+The attached screenshot is the CURRENT state. Interactive elements you may act on (pick by "ref"):
+${offered.map((it) => `- ${it.ref} [${it.role || it.tag}] "${it.name}"${it.options ? ` options=${JSON.stringify(it.options)}` : ''}`).join('\n')}
+
+If the current state already showcases the change well, stop. Otherwise pick ONE action that most improves the shot.
+Return ONLY JSON:
+{
+  "done": boolean,        // true = current state is good enough; stop
+  "action": "click" | "hover" | "select" | null,
+  "ref": string | null,   // one of the refs above
+  "value": string | null, // for select: the option value
+  "reason": string
+}`,
+          },
+          { inline_data: { mime_type: 'image/png', data: readFileSync(shot.file).toString('base64') } },
+        ]);
+      } catch (err) {
+        console.warn(`Browse decision failed (${err.message}); stopping loop.`);
+        break;
+      }
+
+      if (decision.done || !decision.action || !decision.ref) {
+        console.log(`Browse: model stopped — ${decision.reason ?? 'no reason'}`);
+        break;
+      }
+      const picked = offered.find((it) => it.ref === decision.ref);
+      if (!picked) { console.warn(`Browse: ref ${decision.ref} not in offered set; stopping.`); break; }
+
+      const loc = refLocator(page, decision.ref);
+      if (!loc) { console.warn('Browse: could not resolve ref to a locator; stopping.'); break; }
+      try {
+        if (decision.action === 'select') {
+          await loc.selectOption(decision.value ?? '', { timeout: 8000 });
+        } else if (decision.action === 'hover') {
+          await loc.hover({ timeout: 8000 });
+        } else {
+          await loc.click({ timeout: 8000 });
+        }
+        history.push(`${decision.action} "${picked.name}"`);
+        console.log(`Browse step ${step}: ${decision.action} "${picked.name}" — ${decision.reason ?? ''}`);
+        await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+        await sleep(500); // let menus/animations settle
+        await capture(`after ${decision.action} "${picked.name}"`);
+      } catch (err) {
+        console.warn(`Browse action failed (${err.message}); stopping loop.`);
+        break;
+      }
+    }
+
+    if (frames.length <= 1) return null; // never interacted; nothing gained over the route shot
+
+    // Pick the single most compelling frame across everything we saw. Insist on
+    // a clean, complete-looking state — reject half-open menus or broken frames.
+    let best = frames[frames.length - 1];
+    try {
+      const pick = await gemini([
+        {
+          text: `Choose the single most compelling screenshot to attach to this post. Prefer a clean, complete-looking state that clearly shows the change; reject anything that looks half-rendered, mid-transition, or broken.
+
+POST DRAFT: ${postText}
+COMMIT MESSAGE: ${commitMessage}
+
+Frames in order: ${frames.map((f, i) => `[${i}] ${f.label}`).join(', ')}
+Return ONLY JSON: { "best_index": number, "reason": string }`,
+        },
+        ...frames.map((f) => ({ inline_data: { mime_type: 'image/png', data: readFileSync(f.file).toString('base64') } })),
+      ], { maxOutputTokens: 8192 });
+      if (Number.isInteger(pick.best_index) && pick.best_index >= 0 && pick.best_index < frames.length) {
+        best = frames[pick.best_index];
+        console.log(`Browse best frame: [${pick.best_index}] ${best.label} — ${pick.reason ?? ''}`);
+      }
+    } catch (err) {
+      console.warn(`Browse frame pick failed (${err.message}); using the last frame.`);
+    }
+    return { file: best.file, note: `screenshot of ${startUrl} (${best.label})` };
+  } catch (err) {
+    console.warn(`Interactive browse failed (${err.message}); falling back to plain screenshots.`);
+    return null;
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
 // Best-effort list of files that define routes/pages in the consumer repo, so
 // the model can find where a changed component actually renders when the
 // first screenshot round misses.
@@ -407,6 +589,15 @@ async function main() {
       console.warn('ROUTES env is not valid JSON; ignoring.');
     }
   }
+
+  // Interactive browse: let the screenshotter click/hover/select its way to a
+  // more compelling state before shooting (on by default; falls back to plain
+  // route screenshots on any trouble). interactionHints is optional free text
+  // steering it, e.g. "prefer a branded theme and composed example screens".
+  const INTERACTIVE_SHOTS = envBool('INTERACTIVE_SHOTS', config.interactiveShots ?? true);
+  const interactionHints = (process.env.INTERACTION_HINTS && process.env.INTERACTION_HINTS.trim())
+    || (typeof config.interactionHints === 'string' ? config.interactionHints.trim() : '')
+    || '';
 
   // cover.png overrides everything (static image mode).
   const USE_COVER = existsSync(COVER_PATH);
@@ -631,9 +822,30 @@ Return ONLY a JSON object matching this exact schema (no prose):
         const chosen = await pickBestShot(shots, postText, commitMessage);
         const fallback = { file: chosen.file, note: `screenshot of ${chosen.url}` };
 
+        // Build a pool of candidate images and let vision pick the most
+        // compelling one that shows the change: the plain landing shot, a tight
+        // close-up of the changed element, and — when interactive shots are on
+        // — the best frame from driving the page (branded theme, composed
+        // screen, opened menu). Any source that fails just isn't in the pool.
+        const pool = [fallback];
         const closeup = await shootElementCloseUp(ctx, chosen.url, elementHint, 'r1');
-        imagePath = closeup ?? fallback.file;
-        imageNote = closeup ? `close-up of the changed component on ${chosen.url}` : fallback.note;
+        if (closeup) pool.push({ file: closeup, note: `close-up of the changed component on ${chosen.url}` });
+        if (INTERACTIVE_SHOTS) {
+          const framed = await browseForBestFrame(ctx, chosen.url, { postText, commitMessage, interactionHints });
+          if (framed) pool.push(framed);
+        }
+
+        if (pool.length === 1) {
+          imagePath = fallback.file;
+          imageNote = fallback.note;
+        } else {
+          const best = await pickBestShot(
+            pool.map((p, i) => ({ ...p, path: p.note, url: p.note, file: p.file, _i: i })),
+            postText, commitMessage,
+          );
+          imagePath = best.file;
+          imageNote = best.note;
+        }
 
         // Verify the image shows the change. If it doesn't, widen the search
         // once: let the model map the diff to the repo's route/page files to

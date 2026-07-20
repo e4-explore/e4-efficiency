@@ -30,9 +30,13 @@ Commit + merged-PR + recent-commit context → Gemini one-sentence draft
 (what changed + why) + candidate routes + changed-element hint (model-fallback
 chain) → image (cover.png | local preview build | deployed site, deploy-gated)
 → vision picks best screenshot → element close-up when the changed component
-can be located → vision verification, with one widened route search over the
-repo's page files on a miss → editor pass vs. rubric + history → post to X →
-append `history.jsonl`, committed back as a real-account identity.
+can be located → optional interactive browse (bounded vision loop drives the
+page via clicks/hovers/selects to reach a compelling state, safety-gated
+against mutating/financial/account/send actions) → vision picks best of
+{full page, close-up, interactive frames} → vision verification, with one
+widened route search over the repo's page files on a miss → editor pass vs.
+rubric + history → post to X → append `history.jsonl`, committed back as a
+real-account identity.
 
 ## Released
 

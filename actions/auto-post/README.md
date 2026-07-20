@@ -75,6 +75,8 @@ of parent order.
 | `x-access-token` / `x-access-token-secret` | yes | — | Read+Write. |
 | `homepage-url` | no | `''` | Deployed site to screenshot. Required unless the consumer commits `cover.png` or a `config.json` preview. |
 | `routes` | no | `''` | JSON array of route paths to hint the screenshotter. |
+| `interactive-shots` | no | `'true'` | Let the screenshotter click/hover/select navigational + display controls to drive the page to a more compelling state before shooting. Never triggers mutating/financial/account/send actions. `'false'` = shoot routes as-loaded. |
+| `interaction-hints` | no | `''` | Free-text steering for interactive shots, e.g. `"Prefer a branded theme and composed example screens over atomic component stories."` |
 | `include-commit-link` | no | `'false'` | Append the commit URL to the post. |
 | `gemini-model` | no | `''` | Pin a model id; else the fallback chain is used. |
 | `deploy-gate-health-url` | no | `''` | Poll (push-only) until it reports the pushed SHA before screenshotting. |

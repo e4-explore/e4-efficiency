@@ -15,8 +15,13 @@ When a commit lands on `main`:
    changed + why it matters — in the skill's hardcoded voice, using the merged
    PR's title/body and recent commit history for the "why", plus pick the paths
    on your deployed site most likely to show the change.
-3. Playwright + Chromium screenshots those paths, and zooms into the changed
-   component when it can locate it (falling back to the full page).
+3. Playwright + Chromium screenshots those paths. It can also *drive* the page
+   — clicking/hovering/selecting navigational and display controls to reach a
+   more compelling state (open the right screen, switch to a branded theme,
+   open a menu), capturing a frame after each step — then picks the best of the
+   full page, an element close-up, and the interactive frames. (Interaction
+   never triggers mutating/financial/account/send actions; on by default,
+   steerable per repo with `interaction-hints`.)
 4. A vision pass verifies the image actually shows the change; if it doesn't,
    the model maps the diff to the repo's route files to find where the change
    renders and retries there.
@@ -139,6 +144,9 @@ enabled).
 - ✅ Multi-route screenshots with Gemini vision picking the most engaging shot
 - ✅ Element close-up: the diff is mapped to the changed component and the
   screenshot zooms into it (full-page shot as fallback)
+- ✅ Interactive shots: a bounded, vision-driven loop drives the page (clicks,
+  hovers, theme/tab toggles, opening menus) to reach a compelling state and
+  captures the best frame — safety-gated against destructive/financial actions
 - ✅ Vision verification: a shot that doesn't visibly show the change triggers
   a widened route search over the repo's page files before falling back
 - ✅ PR title/body + recent commit subjects feed the draft, so the post can say

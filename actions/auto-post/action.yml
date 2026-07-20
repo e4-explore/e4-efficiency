@@ -27,6 +27,14 @@ inputs:
     description: 'JSON array of route paths to hint the screenshotter, e.g. ''["/", "/players"]''.'
     required: false
     default: ''
+  interactive-shots:
+    description: 'When "true" (default), the screenshotter may click/hover/select navigational and display controls to drive the page to a more compelling state before shooting (e.g. open the right screen, switch to a branded theme, open a menu). Set "false" to only screenshot routes as-loaded. Never triggers mutating/financial/account/send actions.'
+    required: false
+    default: 'true'
+  interaction-hints:
+    description: 'Optional free-text steering for interactive shots, e.g. "Prefer a branded (non-wireframe) theme and composed example screens over atomic component stories."'
+    required: false
+    default: ''
   include-commit-link:
     description: 'Append the commit URL to the post text ("true"/"false").'
     required: false
@@ -132,6 +140,8 @@ runs:
         DRY_RUN: ${{ inputs.dry-run }}
         HOMEPAGE_URL: ${{ inputs.homepage-url }}
         ROUTES: ${{ inputs.routes }}
+        INTERACTIVE_SHOTS: ${{ inputs.interactive-shots }}
+        INTERACTION_HINTS: ${{ inputs.interaction-hints }}
         INCLUDE_COMMIT_LINK: ${{ inputs.include-commit-link }}
         GEMINI_MODEL: ${{ inputs.gemini-model }}
         GEMINI_API_KEY: ${{ inputs.gemini-api-key }}

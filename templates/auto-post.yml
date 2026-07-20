@@ -116,6 +116,12 @@ jobs:
           # Preview without publishing: run with workflow_dispatch dry-run=true.
           DRY_RUN: ${{ github.event.inputs.dry-run }}
           HOMEPAGE_URL: ${{ steps.meta.outputs.homepage }}
+          # Interactive shots (drive the page to a better state before shooting)
+          # are on by default; set repo variable INTERACTIVE_SHOTS=false to
+          # disable, or INTERACTION_HINTS to steer it (e.g. "prefer a branded
+          # theme and composed example screens").
+          INTERACTIVE_SHOTS: ${{ vars.INTERACTIVE_SHOTS }}
+          INTERACTION_HINTS: ${{ vars.INTERACTION_HINTS }}
           # Optional: set repo variable INCLUDE_COMMIT_LINK=true to append the commit URL.
           INCLUDE_COMMIT_LINK: ${{ vars.INCLUDE_COMMIT_LINK }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

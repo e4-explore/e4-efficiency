@@ -84,6 +84,15 @@ real merges take over.
   homepage-url: https://your-app.vercel.app
   routes: '["/?path=/story/welcome--start"]'
   ```
+- **Interactive shots pay off most here.** A raw story shot is often a wireframe
+  atomic component; the compelling shot is a composed example on a *branded*
+  theme with a menu open. Steer the driver toward it — the sidebar nav and theme
+  toolbar are top-frame, story internals are in the preview iframe (both are
+  covered):
+  ```yaml
+  interaction-hints: 'Prefer a branded (non-wireframe) theme via the toolbar, and composed Examples/Full-screen stories over atomic component stories.'
+  ```
+  Set `interactive-shots: 'false'` to opt out and screenshot stories as-loaded.
 
 ## Private cross-repo action access
 
