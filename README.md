@@ -11,21 +11,26 @@ Built for builders who'd rather ship than tweet.
 When a commit lands on `main`:
 
 1. A GitHub Actions workflow fires.
-2. The workflow asks Gemini (free tier) to write a one-sentence post — what
-   changed + why it matters — in the skill's hardcoded voice, using the merged
-   PR's title/body and recent commit history for the "why", plus pick the paths
-   on your deployed site most likely to show the change.
-3. Playwright + Chromium screenshots those paths. It can also *drive* the page
-   — clicking/hovering/selecting navigational and display controls to reach a
-   more compelling state (open the right screen, switch to a branded theme,
-   open a menu), capturing a frame after each step — then picks the best of the
-   full page, an element close-up, and the interactive frames. (Interaction
-   never triggers mutating/financial/account/send actions; on by default,
-   steerable per repo with `interaction-hints`.)
-4. A vision pass verifies the image actually shows the change; if it doesn't,
-   the model maps the diff to the repo's route files to find where the change
-   renders and retries there.
-5. The image is uploaded to X and the post is published with media attached.
+2. The workflow asks Gemini (free tier) to segment the push into 1-4 distinct
+   changes — most pushes are one coherent change and get exactly one; a push
+   that bundles a few separate tweaks (the common "worked on one thing,
+   noticed a couple others, fixed those too" case) gets one short line per
+   change, most user-facing first — using the merged PR's title/body and
+   recent commit history for the "why", plus candidate paths per change on
+   your deployed site most likely to show it.
+3. Playwright + Chromium screenshots those paths per change. It can also
+   *drive* the page — clicking/hovering/selecting navigational and display
+   controls to reach a more compelling state (open the right screen, switch to
+   a branded theme, open a menu), capturing a frame after each step — then
+   picks the best of the full page, an element close-up, and the interactive
+   frames. (Interaction never triggers mutating/financial/account/send
+   actions; on by default, steerable per repo with `interaction-hints`.)
+4. A vision pass verifies each image actually shows its change; if it doesn't,
+   the model maps that change's files to the repo's route files to find where
+   it renders and retries there. A change whose shots all fail is dropped
+   (its line still posts, just without an image) rather than failing the run.
+5. Up to 4 images (X's own per-post limit) are uploaded to X and the post is
+   published with all of them attached.
 
 ## Install
 
@@ -127,7 +132,8 @@ Current voice: one statement — the feature/change itself, then why it matters
 ("'Create App' button — makes it faster to spin up a new project"), never
 narrated as "we did X" or "renamed/added/fixed X so Y". No hype words, no
 exclamation marks, ≤1 emoji, under 280 chars (240 with the commit link
-enabled).
+enabled). When a push bundles several distinct changes, each gets its own
+line — same statement rules, no connective words between them.
 
 ## What's in v1
 
@@ -149,6 +155,9 @@ enabled).
   captures the best frame — safety-gated against destructive/financial actions
 - ✅ Vision verification: a shot that doesn't visibly show the change triggers
   a widened route search over the repo's page files before falling back
+- ✅ Bundled changes: a push with a few distinct, separately-noticeable
+  changes (not just one feature) gets one line + one image per change, up to
+  4 (X's own per-post image limit) — single-change pushes are unaffected
 - ✅ PR title/body + recent commit subjects feed the draft, so the post can say
   *why* a change matters, not just what it did
 - ✅ Editor pass: draft is critiqued against an engagement rubric and rewritten

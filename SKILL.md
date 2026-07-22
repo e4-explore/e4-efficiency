@@ -17,11 +17,17 @@ finger. When merged to `main`, a GitHub Actions run:
 1. Pulls the merge commit and file diff, plus the merged PR's title/body and
    recent commit subjects — that's where the "why" of a change lives.
 2. Asks Gemini (free tier, with a model-fallback chain so a retired model id
-   can't kill a run) to draft a one-sentence post (what changed + why) in a
-   fixed builder voice, propose up to 3 routes likely to show the change, and
-   name the changed UI element for a zoomed-in shot.
-3. Gets an image (first available source wins):
-   - a committed static `cover.png`, used verbatim; or
+   can't kill a run) to segment the push into 1-4 distinct changes — most
+   pushes are one coherent change and get exactly one; a push that bundles a
+   few separate tweaks to the same area (the common "worked on one thing,
+   noticed a couple others, fixed those too" case) gets one item per change,
+   ordered most user-facing first, capped at `max-bundle-images` (default 4 —
+   X's own per-post image limit). Each item gets its own draft line (what
+   changed + why) in a fixed builder voice, up to 3 candidate routes, and the
+   changed UI element for a zoomed-in shot.
+3. Per change, gets an image (first available source wins):
+   - a committed static `cover.png`, used verbatim — always singular,
+     regardless of how many changes were found; or
    - a **local preview build** — CI builds and serves the pushed code, then
      screenshots the candidate routes (image always matches the commit); or
    - the deployed site (optionally **deploy-gated**: wait until the deploy
@@ -35,12 +41,14 @@ finger. When merged to `main`, a GitHub Actions run:
    best of the full page, the close-up, and those frames. Interaction is
    safety-gated (never mutating/financial/account/send actions), on by
    default, and steerable per repo via `interaction-hints`. A vision check
-   verifies the image actually shows the change; a miss triggers one widened
-   route search over the repo's page files before falling back to the best
-   full-page shot.
-4. Runs an editor pass: Gemini critiques the draft against an engagement rubric
-   and the repo's recent post history (so hooks vary), then rewrites it.
-5. Uploads the image to X and posts the tweet with media attached.
+   verifies the image actually shows that change; a miss triggers one widened
+   route search over that change's files before falling back to the best
+   full-page shot. A change whose shots all fail is dropped (its line still
+   posts, just without an image) rather than failing the whole run.
+4. Runs an editor pass: Gemini critiques the assembled draft (one line per
+   change) against an engagement rubric and the repo's recent post history (so
+   hooks vary), then rewrites it — keeping it multi-line if it started that way.
+5. Uploads up to 4 images to X and posts the tweet with all of them attached.
 6. Appends the post to `.github/auto-post/history.jsonl` and commits it back
    (as a real account identity, so deploy platforms like Vercel don't block it),
    so every future run learns from what was already posted.
@@ -165,8 +173,10 @@ Hardcoded in `post.mjs` (`buildVoice` + `RUBRIC`). One statement — the
 feature/change itself, then why it matters ("'Create App' button — makes it
 faster to spin up a new project"), never narrated as "we did X" or
 "renamed/added/fixed X so Y". No hype words, no exclamation marks, ≤1 emoji,
-under 280 chars (240 if the commit link is enabled). Edit those to retune; the
-referenced action picks up the change on the next tag.
+under 280 chars (240 if the commit link is enabled). When a push bundles
+several distinct changes, each gets its own line, same statement rules, no
+connective words between them. Edit those to retune; the referenced action
+picks up the change on the next tag.
 
 ## Files in this skill
 

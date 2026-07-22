@@ -12,16 +12,23 @@
 //
 // Pipeline:
 //   1. Pull commit context from the GitHub API.
-//   2. Gemini drafts post text + candidate routes to screenshot.
-//   3. Image source (first match wins):
-//        a. cover.png       — static image, used verbatim
+//   2. Gemini segments the commit into 1-4 distinct changes (most pushes are
+//      one coherent change and get exactly one; a push that bundles a few
+//      unrelated tweaks gets one clause + one image per change), each with
+//      its own draft clause + candidate routes to screenshot.
+//   3. Per change, image source (first match wins):
+//        a. cover.png       — static image, used verbatim (always singular —
+//                             skips segmentation entirely)
 //        b. config.preview  — build & serve the pushed code locally, shoot it
 //        c. homepage URL    — screenshot the deployed site
-//      When several routes are shot, Gemini vision picks the most engaging.
-//   4. Editor pass: Gemini critiques the draft against an engagement rubric
-//      + recent post history, then rewrites it.
-//   5. Post to X with media. Append to history.jsonl (the workflow commits it
-//      back so future runs learn from past posts).
+//      When several routes are shot, Gemini vision picks the most engaging;
+//      it can also drive the page (click/hover/select) toward a better state.
+//      A change whose shots all fail is dropped (text-only), not fatal.
+//   4. Editor pass: Gemini critiques the assembled draft against an
+//      engagement rubric + recent post history, then rewrites it.
+//   5. Post to X with up to 4 images (X's own per-post limit). Append to
+//      history.jsonl (the workflow commits it back so future runs learn from
+//      past posts).
 //
 // Edit VOICE to retune tone; edit RUBRIC to retune the editor.
 //
@@ -57,11 +64,14 @@ const GEMINI_503_RETRY_DELAYS_MS = [2000, 5000];
 
 const RUBRIC = `
 Engagement rubric (what makes a post worth reading):
-- One sentence, one idea: the change plus the reason it matters, joined naturally.
+- One statement, one idea per change: the change plus the reason it matters, joined naturally.
 - The "why" is product value ("MLS bets are in now"), never a restatement of the change ("to reflect broader coverage").
 - Concrete beats abstract: name the thing ("live odds now refresh every 30s"), never "improved performance".
 - State it as a fact about the product, not a narrated action: "'Create App' button — makes it faster to spin up a new project", not "We renamed the setup button to 'Create App' so it's easier to spin up a new project".
 - Vary structure against recent posts — if the last post opened with the feature name, don't do it again.
+- When a push bundles several distinct changes: each gets its own line, ordered
+  most user-facing first, no connective narration ("also", "plus", "additionally")
+  between them — every line stands alone, same statement rules as a single post.
 `.trim();
 
 function buildVoice(includeCommitLink) {
@@ -70,15 +80,18 @@ function buildVoice(includeCommitLink) {
     : '- Under 280 characters total.';
   return `
 Voice rules (follow strictly):
-- Exactly one statement: name the feature/change itself, then the reason it matters. e.g. "'Create App' button — makes it faster to spin up a new project" rather than "We renamed the setup button to 'Create App' so it's easier to spin up a new project".
+- Exactly one statement per change: name the feature/change itself, then the reason it matters. e.g. "'Create App' button — makes it faster to spin up a new project" rather than "We renamed the setup button to 'Create App' so it's easier to spin up a new project".
 - Never use "we", "our", or "I" as the sentence's subject, and never open with "We <verb>ed" or "Renamed/Added/Fixed X so Y" — state the fact, don't narrate the act of changing it.
 - Plain language. Never the changelog pattern "X now does Y to reflect Z".
 - No hype words: never "amazing", "exciting", "game-changer", "thrilled", "stoked", "huge", "massive".
 - No exclamation marks.
-- At most one fitting emoji (optional, skip if unsure).
+- At most one fitting emoji total across the whole post (optional, skip if unsure).
 - No hashtags unless they genuinely add reach.
 ${limitLine}
 - If the change is purely internal/no user impact, say so plainly — don't pretend it's a feature.
+- If the push bundles multiple distinct changes, put each on its own line (a
+  short list, no bullets/numbering) instead of one run-on sentence — see the
+  rubric for ordering and connective-word rules.
 `.trim();
 }
 
@@ -400,7 +413,7 @@ function refLocator(page, ref) {
 // every step. Returns the single best frame it saw, or null to fall back to
 // the plain route/close-up shots. Every failure degrades gracefully; the loop
 // is hard-bounded on steps and wall-clock so it can't hang the CI job.
-async function browseForBestFrame(ctx, startUrl, { postText, commitMessage, interactionHints, maxSteps = 5, wallClockMs = 90_000 }) {
+async function browseForBestFrame(ctx, startUrl, { postText, commitMessage, interactionHints, maxSteps = 5, wallClockMs = 90_000 }, tag = 'x') {
   const page = await ctx.newPage();
   const frames = [];
   const history = [];
@@ -410,8 +423,10 @@ async function browseForBestFrame(ctx, startUrl, { postText, commitMessage, inte
       await page.goto(startUrl, { waitUntil: 'load', timeout: 30_000 });
     });
 
+    // tag keeps filenames distinct across concurrent/sequential calls in the
+    // same run (e.g. one call per bundled change) so frames can't collide.
     const capture = async (label) => {
-      const file = join(tmpdir(), `auto-post-frame-${frames.length}.png`);
+      const file = join(tmpdir(), `auto-post-frame-${tag}-${frames.length}.png`);
       await page.screenshot({ path: file, fullPage: false });
       frames.push({ file, label });
     };
@@ -518,6 +533,117 @@ Return ONLY JSON: { "best_index": number, "reason": string }`,
   }
 }
 
+// Resolves the single best image for ONE bundled change: route shots, an
+// element close-up, an optional interactive-browse frame, vision-picked
+// across all three, then verified and — on a miss — retried once against
+// routes widened from this change's own files (not the whole commit's).
+// Mirrors the original single-change pipeline exactly, just parameterized so
+// it can run once per item in a batch of several changes from the same push.
+// `tag` must be distinct per call in a run (keeps temp filenames from
+// colliding across changes). Returns { file, note } or null if every attempt
+// failed for THIS change — the caller drops the image but keeps its text
+// clause; it's fatal only if every change in the batch fails.
+async function resolveChangeImage(ctx, baseUrl, repoRoot, change, shared, tag) {
+  const { commitMessage, interactiveShots, interactionHints, browseMaxSteps, browseWallClockMs } = shared;
+  const clause = change.clause;
+  const candidates = (Array.isArray(change.candidate_paths) && change.candidate_paths.length
+    ? change.candidate_paths : ['/'])
+    .slice(0, 3)
+    .map((p) => (typeof p === 'string' && p.trim() ? p.trim() : '/'));
+  const elementHint = (change.element_hint && typeof change.element_hint === 'object') ? change.element_hint : null;
+
+  const shots = await shootRoutes(ctx, baseUrl, candidates, `${tag}-r1`);
+  if (!shots.length) {
+    console.warn(`Change "${clause}": every candidate screenshot failed; posting without an image for this item.`);
+    return null;
+  }
+  const chosen = await pickBestShot(shots, clause, commitMessage);
+  const fallback = { file: chosen.file, note: `screenshot of ${chosen.url}` };
+
+  const pool = [fallback];
+  const closeup = await shootElementCloseUp(ctx, chosen.url, elementHint, `${tag}-r1`);
+  if (closeup) pool.push({ file: closeup, note: `close-up of the changed component on ${chosen.url}` });
+  if (interactiveShots) {
+    const framed = await browseForBestFrame(
+      ctx, chosen.url,
+      { postText: clause, commitMessage, interactionHints, maxSteps: browseMaxSteps, wallClockMs: browseWallClockMs },
+      `${tag}-r1`,
+    );
+    if (framed) pool.push(framed);
+  }
+
+  let imagePath, imageNote;
+  if (pool.length === 1) {
+    imagePath = fallback.file;
+    imageNote = fallback.note;
+  } else {
+    const best = await pickBestShot(pool.map((p) => ({ ...p, path: p.note, url: p.note })), clause, commitMessage);
+    imagePath = best.file;
+    imageNote = best.note;
+  }
+
+  // Verify the image shows this change. If it doesn't, widen the search once
+  // — scoped to this change's own files, not the whole commit's — before
+  // falling back to the best full-page shot from the first round.
+  if (!(await shotShowsChange(imagePath, clause, commitMessage))) {
+    let recovered = false;
+    const changeFiles = Array.isArray(change.files) && change.files.length ? change.files : undefined;
+    const routeFiles = listRouteFiles(repoRoot);
+    if (routeFiles.length) {
+      try {
+        const tried = new Set(candidates);
+        const widened = await gemini([{
+          text: `A screenshot for this social post missed the change. Find where the changed UI actually renders.
+
+POST DRAFT: ${clause}
+COMMIT MESSAGE: ${commitMessage}
+FILES CHANGED: ${JSON.stringify(changeFiles ?? [])}
+ALREADY TRIED URL PATHS (do not repeat): ${JSON.stringify([...tried])}
+ROUTE/PAGE FILES IN THE REPO:
+${routeFiles.join('\n')}
+
+Map the changed files to the routes that render them.
+Return ONLY JSON:
+{
+  "candidate_paths": string[],  // 1 to 3 new URL paths where the change is most likely visible, best first
+  "element_hint": { "text": string | null, "selector": string | null } | null
+}`,
+        }]);
+
+        const newPaths = (Array.isArray(widened.candidate_paths) ? widened.candidate_paths : [])
+          .filter((p) => typeof p === 'string' && p.trim() && !tried.has(p.trim()))
+          .map((p) => p.trim())
+          .slice(0, 3);
+        if (newPaths.length) {
+          const shots2 = await shootRoutes(ctx, baseUrl, newPaths, `${tag}-r2`);
+          if (shots2.length) {
+            const chosen2 = await pickBestShot(shots2, clause, commitMessage);
+            const hint2 = (widened.element_hint && typeof widened.element_hint === 'object')
+              ? widened.element_hint : elementHint;
+            const closeup2 = await shootElementCloseUp(ctx, chosen2.url, hint2, `${tag}-r2`);
+            const file2 = closeup2 ?? chosen2.file;
+            if (await shotShowsChange(file2, clause, commitMessage)) {
+              imagePath = file2;
+              imageNote = closeup2
+                ? `close-up of the changed component on ${chosen2.url}`
+                : `screenshot of ${chosen2.url}`;
+              recovered = true;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(`Change "${clause}": widened route search failed: ${err.message}`);
+      }
+    }
+    if (!recovered) {
+      console.warn(`Change "${clause}": not visibly confirmed on any route; using the best full-page shot.`);
+      imagePath = fallback.file;
+      imageNote = fallback.note;
+    }
+  }
+  return { file: imagePath, note: imageNote };
+}
+
 // Best-effort list of files that define routes/pages in the consumer repo, so
 // the model can find where a changed component actually renders when the
 // first screenshot round misses.
@@ -598,6 +724,13 @@ async function main() {
   const interactionHints = (process.env.INTERACTION_HINTS && process.env.INTERACTION_HINTS.trim())
     || (typeof config.interactionHints === 'string' ? config.interactionHints.trim() : '')
     || '';
+
+  // A push can bundle several distinct changes (one feature at a time is the
+  // common case and still gets exactly one image); this caps how many get
+  // their own image, hard-limited to 4 — X's own max images per post.
+  const MAX_BUNDLE_IMAGES = Math.max(1, Math.min(4, Number.parseInt(
+    process.env.MAX_BUNDLE_IMAGES || config.maxBundleImages || '4', 10,
+  ) || 4));
 
   // cover.png overrides everything (static image mode).
   const USE_COVER = existsSync(COVER_PATH);
@@ -726,7 +859,7 @@ async function main() {
 
   const history = loadHistory(HISTORY_PATH);
 
-  // ---- 2. draft + candidate routes ----
+  // ---- 2. segment into 1-4 distinct changes + draft each ----
 
   const routesHint = Array.isArray(routes) && routes.length
     ? `\n- Known routes in this app: ${JSON.stringify(routes)}`
@@ -736,11 +869,20 @@ async function main() {
   const draftPlan = await gemini([{
     text: `${VOICE}
 
-You are writing one short social post about the change below.
+You are writing a short social post about the change(s) below. Most pushes are
+ONE coherent change — return exactly one item for those, even if it touches
+many files; do not artificially split a single feature into pieces. Some
+pushes genuinely bundle a few distinct, separately-noticeable changes to the
+same area (the common case when someone works on one thing, notices a few
+other things nearby, and fixes those too in the same push) — for those, return
+one item per distinct change, ordered most user-facing first. Cap at
+${MAX_BUNDLE_IMAGES}; if there are more, keep the ${MAX_BUNDLE_IMAGES} most
+user-visible and fold anything minor into the nearest relevant item instead of
+giving it its own.
 
 PROJECT
 - Repo: ${GITHUB_REPOSITORY}${routesHint}
-${USE_COVER ? '- Image: a static cover image already chosen by the project owner will be attached.' : '- Screenshots of the app will be taken; you choose which routes to try.'}
+${USE_COVER ? '- Image: a static cover image already chosen by the project owner will be attached (same image regardless of how many changes are found).' : '- Screenshots of the app will be taken per change; you choose which routes to try for each.'}
 
 COMMIT
 - Message: ${commitMessage}
@@ -751,30 +893,43 @@ ${pushBlock}${prBlock}${recentBlock}
 TASK
 Return ONLY a JSON object matching this exact schema (no prose):
 {
-  "post_text": string${wantRoutes ? `,
-  "candidate_paths": string[],  // 1 to 3 URL paths most likely to visually showcase this change,
-                                // ordered best-guess first. Use "/" if unsure.
-                                // Examples: ["/", "/pricing", "/props/today"]
-  "element_hint": {             // the single UI element the change is visible in (for a zoomed-in shot)
-    "text": string | null,      // short distinguishing text rendered inside it, exactly as a user sees it
-    "selector": string | null   // a CSS selector for it if the diff makes one obvious, else null
-  } | null                      // null when no single element visibly changed` : ''}
+  "changes": [
+    {
+      "clause": string,           // this ONE change's post line, following the voice rules above
+      "files": string[]${wantRoutes ? ',' : ''}  // subset of "Files changed" that this specific change corresponds to
+${wantRoutes ? `      "candidate_paths": string[],  // 1 to 3 URL paths most likely to visually showcase THIS change,
+                                     // ordered best-guess first. Use "/" if unsure.
+                                     // Examples: ["/", "/pricing", "/props/today"]
+      "element_hint": {              // the single UI element THIS change is visible in (for a zoomed-in shot)
+        "text": string | null,       // short distinguishing text rendered inside it, exactly as a user sees it
+        "selector": string | null    // a CSS selector for it if the diff makes one obvious, else null
+      } | null                       // null when no single element visibly changed
+` : ''}    }
+  ]
 }`,
   }]);
 
-  let postText = (draftPlan.post_text ?? '').trim();
-  if (!postText) throw new Error('Gemini returned empty post_text.');
+  const rawChanges = Array.isArray(draftPlan.changes) ? draftPlan.changes : [];
+  const changes = rawChanges
+    .filter((c) => c && typeof c === 'object' && typeof c.clause === 'string' && c.clause.trim())
+    .map((c) => ({ ...c, clause: c.clause.trim() }))
+    .slice(0, MAX_BUNDLE_IMAGES);
+  if (!changes.length) throw new Error('Gemini returned no usable changes.');
 
-  // ---- 3. image ----
+  let postText = changes.map((c) => c.clause).join('\n');
 
-  let imagePath;
-  let imageNote; // human-readable description of the image for logs/summary/editor
+  // ---- 3. images (one per change, up to MAX_BUNDLE_IMAGES) ----
+
+  let imagePaths = [];
+  let imageNotes = []; // human-readable descriptions, same order as imagePaths
   let previewProc = null;
 
   try {
     if (USE_COVER) {
-      imagePath = COVER_PATH;
-      imageNote = 'static cover image';
+      // Static cover is always singular — one image regardless of how many
+      // changes were found; there's nothing per-change to screenshot.
+      imagePaths = [COVER_PATH];
+      imageNotes = ['static cover image'];
     } else {
       const { chromium } = await import('playwright');
 
@@ -799,17 +954,10 @@ Return ONLY a JSON object matching this exact schema (no prose):
         baseUrl = HOMEPAGE_URL;
       }
 
-      const candidates = (Array.isArray(draftPlan.candidate_paths) && draftPlan.candidate_paths.length
-        ? draftPlan.candidate_paths : ['/'])
-        .slice(0, 3)
-        .map((p) => (typeof p === 'string' && p.trim() ? p.trim() : '/'));
-      const elementHint = (draftPlan.element_hint && typeof draftPlan.element_hint === 'object')
-        ? draftPlan.element_hint : null;
-
-      // Screenshot candidate routes, pick the best full-page shot, then try to
-      // zoom into the changed component. Temp files go to os.tmpdir() so we
-      // never pollute the consumer's working tree (referenced mode runs from
-      // the repo root).
+      // One browser+context reused across every change (cheaper than
+      // relaunching per change); tag prefixes on every temp file keep them
+      // from colliding. Interactive browse gets a smaller per-change budget
+      // when bundling more than one change, so total wall-clock stays sane.
       const browser = await chromium.launch();
       try {
         // deviceScaleFactor 2 renders at retina resolution so element close-ups
@@ -817,95 +965,22 @@ Return ONLY a JSON object matching this exact schema (no prose):
         // X displays them larger in the timeline.
         const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2 });
 
-        const shots = await shootRoutes(ctx, baseUrl, candidates, 'r1');
-        if (!shots.length) throw new Error('Every candidate screenshot failed.');
-        const chosen = await pickBestShot(shots, postText, commitMessage);
-        const fallback = { file: chosen.file, note: `screenshot of ${chosen.url}` };
+        const shared = {
+          commitMessage,
+          interactiveShots: INTERACTIVE_SHOTS,
+          interactionHints,
+          browseMaxSteps: changes.length > 1 ? 3 : 5,
+          browseWallClockMs: changes.length > 1 ? 45_000 : 90_000,
+        };
 
-        // Build a pool of candidate images and let vision pick the most
-        // compelling one that shows the change: the plain landing shot, a tight
-        // close-up of the changed element, and — when interactive shots are on
-        // — the best frame from driving the page (branded theme, composed
-        // screen, opened menu). Any source that fails just isn't in the pool.
-        const pool = [fallback];
-        const closeup = await shootElementCloseUp(ctx, chosen.url, elementHint, 'r1');
-        if (closeup) pool.push({ file: closeup, note: `close-up of the changed component on ${chosen.url}` });
-        if (INTERACTIVE_SHOTS) {
-          const framed = await browseForBestFrame(ctx, chosen.url, { postText, commitMessage, interactionHints });
-          if (framed) pool.push(framed);
-        }
-
-        if (pool.length === 1) {
-          imagePath = fallback.file;
-          imageNote = fallback.note;
-        } else {
-          const best = await pickBestShot(
-            pool.map((p, i) => ({ ...p, path: p.note, url: p.note, file: p.file, _i: i })),
-            postText, commitMessage,
-          );
-          imagePath = best.file;
-          imageNote = best.note;
-        }
-
-        // Verify the image shows the change. If it doesn't, widen the search
-        // once: let the model map the diff to the repo's route/page files to
-        // find where the changed UI actually renders. Final fallback is the
-        // best full-page shot from the first round (previous behavior).
-        if (!(await shotShowsChange(imagePath, postText, commitMessage))) {
-          let recovered = false;
-          const routeFiles = listRouteFiles(REPO_ROOT);
-          if (routeFiles.length) {
-            try {
-              const tried = new Set(candidates);
-              const widened = await gemini([{
-                text: `A screenshot for this social post missed the change. Find where the changed UI actually renders.
-
-POST DRAFT: ${postText}
-COMMIT MESSAGE: ${commitMessage}
-FILES CHANGED: ${JSON.stringify(files.map((f) => f.filename))}
-ALREADY TRIED URL PATHS (do not repeat): ${JSON.stringify([...tried])}
-ROUTE/PAGE FILES IN THE REPO:
-${routeFiles.join('\n')}
-
-Map the changed files to the routes that render them.
-Return ONLY JSON:
-{
-  "candidate_paths": string[],  // 1 to 3 new URL paths where the change is most likely visible, best first
-  "element_hint": { "text": string | null, "selector": string | null } | null
-}`,
-              }]);
-
-              const newPaths = (Array.isArray(widened.candidate_paths) ? widened.candidate_paths : [])
-                .filter((p) => typeof p === 'string' && p.trim() && !tried.has(p.trim()))
-                .map((p) => p.trim())
-                .slice(0, 3);
-              if (newPaths.length) {
-                const shots2 = await shootRoutes(ctx, baseUrl, newPaths, 'r2');
-                if (shots2.length) {
-                  const chosen2 = await pickBestShot(shots2, postText, commitMessage);
-                  const hint2 = (widened.element_hint && typeof widened.element_hint === 'object')
-                    ? widened.element_hint : elementHint;
-                  const closeup2 = await shootElementCloseUp(ctx, chosen2.url, hint2, 'r2');
-                  const file2 = closeup2 ?? chosen2.file;
-                  if (await shotShowsChange(file2, postText, commitMessage)) {
-                    imagePath = file2;
-                    imageNote = closeup2
-                      ? `close-up of the changed component on ${chosen2.url}`
-                      : `screenshot of ${chosen2.url}`;
-                    recovered = true;
-                  }
-                }
-              }
-            } catch (err) {
-              console.warn(`Widened route search failed: ${err.message}`);
-            }
-          }
-          if (!recovered) {
-            console.warn('Change not visibly confirmed on any route; using the best full-page shot.');
-            imagePath = fallback.file;
-            imageNote = fallback.note;
+        for (const [i, change] of changes.entries()) {
+          const resolved = await resolveChangeImage(ctx, baseUrl, REPO_ROOT, change, shared, `c${i}`);
+          if (resolved) {
+            imagePaths.push(resolved.file);
+            imageNotes.push(resolved.note);
           }
         }
+        if (!imagePaths.length) throw new Error('Every candidate screenshot failed for every bundled change.');
       } finally {
         await browser.close();
       }
@@ -917,16 +992,20 @@ Return ONLY JSON:
       ? `\nRECENT POSTS (do not repeat their hooks, structure, or phrasing):\n${history.map((h) => `- ${h.text}`).join('\n')}\n`
       : '';
 
+    const imagesBlock = imageNotes.length > 1
+      ? `ATTACHED IMAGES (${imageNotes.length}, same order as the draft's lines):\n${imageNotes.map((n, i) => `${i + 1}. ${n}`).join('\n')}`
+      : `ATTACHED IMAGE: ${imageNotes[0] ?? '(none)'}`;
+
     const edited = await gemini([{
       text: `${VOICE}
 
 ${RUBRIC}
 
-You are the editor. Improve the draft below so it scores as high as possible on the rubric while staying strictly inside the voice rules. If the draft is already strong, tighten it; do not pad it.
+You are the editor. Improve the draft below so it scores as high as possible on the rubric while staying strictly inside the voice rules. If the draft is already strong, tighten it; do not pad it. If the draft has multiple lines (one per bundled change), keep it multi-line — do not collapse it into one sentence, and do not add or drop lines.
 ${historyBlock}${prBlock}
 DRAFT: ${postText}
 COMMIT MESSAGE: ${commitMessage}
-ATTACHED IMAGE: ${imageNote}
+${imagesBlock}
 
 Return ONLY JSON: { "post_text": string, "critique": string }`,
     }], { maxOutputTokens: 8192 });
@@ -952,16 +1031,28 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
     }
     console.log('Final post:', finalText);
 
+    // X allows at most 4 images per post; MAX_BUNDLE_IMAGES already caps
+    // `changes` at 4, but a defensive slice here costs nothing.
+    imagePaths = imagePaths.slice(0, 4);
+    imageNotes = imageNotes.slice(0, imagePaths.length);
+    const imagesSummaryLine = imageNotes.length > 1
+      ? `**Images:**\n${imageNotes.map((n, i) => `${i + 1}. ${n}`).join('\n')}`
+      : `**Image:** ${imageNotes[0] ?? '(none)'}`;
+
     if (DRY_RUN) {
       // Preview mode: everything ran except the publish. Nothing is written to
-      // history (so no commit-back), and the draft + image are surfaced in the
-      // job summary for review. The image itself is exposed as a step output
-      // (an absolute path on the runner) so the caller workflow can upload it
-      // as a downloadable artifact — GITHUB_STEP_SUMMARY is text-only, it
-      // can't carry the actual PNG off the ephemeral runner.
-      console.log(`DRY RUN — not publishing to X. Would post with image: ${imageNote}`);
+      // history (so no commit-back), and the draft + images are surfaced in
+      // the job summary for review. The images themselves are exposed as a
+      // step output (absolute paths on the runner, one per line) so the
+      // caller workflow can upload them as downloadable artifacts —
+      // GITHUB_STEP_SUMMARY is text-only, it can't carry the actual PNGs off
+      // the ephemeral runner.
+      console.log(`DRY RUN — not publishing to X. Would post with ${imagePaths.length} image(s): ${imageNotes.join(' | ')}`);
       const output = process.env.GITHUB_OUTPUT;
-      if (output) appendFileSync(output, `image_path=${imagePath}\n`);
+      if (output && imagePaths.length) {
+        // Multiline GITHUB_OUTPUT values need the <<DELIM ... DELIM heredoc form.
+        appendFileSync(output, `image_paths<<AUTOPOST_EOF\n${imagePaths.join('\n')}\nAUTOPOST_EOF\n`);
+      }
       const summary = process.env.GITHUB_STEP_SUMMARY;
       if (summary) {
         writeFileSync(
@@ -970,7 +1061,7 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
             '### Auto-post dry run (nothing published)',
             '',
             `**Would tweet:** ${finalText}`,
-            `**Image:** ${imageNote}`,
+            imagesSummaryLine,
             '**Preview:** download the `auto-post-dry-run-preview` artifact from this run (Summary tab, bottom of page).',
             '',
           ].join('\n'),
@@ -986,8 +1077,11 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
         accessSecret: X_ACCESS_TOKEN_SECRET,
       });
 
-      const mediaId = await twitter.v1.uploadMedia(imagePath, { mimeType: 'image/png' });
-      const tweet = await twitter.v2.tweet({ text: finalText, media: { media_ids: [mediaId] } });
+      const mediaIds = [];
+      for (const p of imagePaths) {
+        mediaIds.push(await twitter.v1.uploadMedia(p, { mimeType: 'image/png' }));
+      }
+      const tweet = await twitter.v2.tweet({ text: finalText, media: { media_ids: mediaIds } });
       console.log('Posted tweet id:', tweet.data.id);
 
       // Record for future runs (the workflow commits this file back to the repo).
@@ -998,7 +1092,7 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
         sha: GITHUB_SHA,
         tweet_id: tweet.data.id,
         text: finalText,
-        image: imageNote,
+        images: imageNotes,
       }) + '\n');
 
       const summary = process.env.GITHUB_STEP_SUMMARY;
@@ -1009,7 +1103,7 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
             '### Auto-post published',
             '',
             `**Tweet:** ${finalText}`,
-            `**Image:** ${imageNote}`,
+            imagesSummaryLine,
             `**Tweet id:** ${tweet.data.id}`,
             '',
           ].join('\n'),

@@ -26,27 +26,38 @@ human in the loop. Read `SKILL.md`, `actions/auto-post/README.md`, and
 
 ## Pipeline
 
-Commit + merged-PR + recent-commit context → Gemini one-sentence draft
-(what changed + why) + candidate routes + changed-element hint (model-fallback
-chain) → image (cover.png | local preview build | deployed site, deploy-gated)
-→ vision picks best screenshot → element close-up when the changed component
+Commit + merged-PR + recent-commit context → Gemini segments the push into
+1-4 distinct changes (most pushes are one coherent change and collapse to
+exactly one; a push bundling a few separate tweaks gets one item per change,
+capped at `max-bundle-images`, default 4 — X's own per-post image limit), each
+with its own one-line draft (what changed + why), candidate routes, and
+changed-element hint (model-fallback chain) → per change: image (cover.png
+[always singular] | local preview build | deployed site, deploy-gated) →
+vision picks best screenshot → element close-up when the changed component
 can be located → optional interactive browse (bounded vision loop drives the
 page via clicks/hovers/selects to reach a compelling state, safety-gated
-against mutating/financial/account/send actions) → vision picks best of
-{full page, close-up, interactive frames} → vision verification, with one
-widened route search over the repo's page files on a miss → editor pass vs.
-rubric + history → post to X → append `history.jsonl`, committed back as a
-real-account identity.
+against mutating/financial/account/send actions; smaller step/time budget per
+change when bundling more than one) → vision picks best of {full page,
+close-up, interactive frames} → vision verification scoped to that change's
+own files, with one widened route search on a miss (a change whose shots all
+fail is dropped — its line still posts, no image, not fatal) → editor pass on
+the assembled multi-line draft vs. rubric + history → post to X with up to 4
+images attached → append `history.jsonl`, committed back as a real-account
+identity.
 
 ## Released
 
-- Tagged `v1.0.0` and moving `v1`. SoccerProps pins `@v1`.
+- Tagged `v1.4.1`+ and moving `v1` (batching lands as the next tag after this
+  handoff was last touched — check `git tag -l 'v1.*'` for the actual latest).
+  SoccerProps + e4-components pin `@v1`.
 
 ## Known limits (v2 candidates)
 
 Learns from its own output (rubric + history), not engagement (likes/impressions
-— needs X analytics beyond the free tier). No approval queue, no commit batching,
-no chore filtering, single voice, single X account per repo, no video posts.
+— needs X analytics beyond the free tier). No approval queue, no chore
+filtering, single voice, single X account per repo, no video posts. Commit
+batching (multiple distinct changes → multiple images, one post) shipped —
+see Pipeline above.
 
 ## Open follow-ups
 

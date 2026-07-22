@@ -77,6 +77,7 @@ of parent order.
 | `routes` | no | `''` | JSON array of route paths to hint the screenshotter. |
 | `interactive-shots` | no | `'true'` | Let the screenshotter click/hover/select navigational + display controls to drive the page to a more compelling state before shooting. Never triggers mutating/financial/account/send actions. `'false'` = shoot routes as-loaded. |
 | `interaction-hints` | no | `''` | Free-text steering for interactive shots, e.g. `"Prefer a branded theme and composed example screens over atomic component stories."` |
+| `max-bundle-images` | no | `'4'` | A push can bundle several distinct changes (e.g. a few small fixes made alongside one main feature); this caps how many get their own image/line in the post, 1-4. Hard-capped at 4 (X's own max images per post). Most pushes are one coherent change and get exactly 1 either way. |
 | `include-commit-link` | no | `'false'` | Append the commit URL to the post. |
 | `gemini-model` | no | `''` | Pin a model id; else the fallback chain is used. |
 | `deploy-gate-health-url` | no | `''` | Poll (push-only) until it reports the pushed SHA before screenshotting. |

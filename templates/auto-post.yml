@@ -123,6 +123,10 @@ jobs:
           # theme and composed example screens").
           INTERACTIVE_SHOTS: ${{ vars.INTERACTIVE_SHOTS }}
           INTERACTION_HINTS: ${{ vars.INTERACTION_HINTS }}
+          # A push can bundle several distinct changes; this caps how many get
+          # their own image/line in the post (1-4, hard-capped at 4 — X's own
+          # limit). Set repo variable MAX_BUNDLE_IMAGES to override the default.
+          MAX_BUNDLE_IMAGES: ${{ vars.MAX_BUNDLE_IMAGES }}
           # Optional: set repo variable INCLUDE_COMMIT_LINK=true to append the commit URL.
           INCLUDE_COMMIT_LINK: ${{ vars.INCLUDE_COMMIT_LINK }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -132,16 +136,16 @@ jobs:
           X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
         run: node post.mjs
 
-      # Dry-run only: GITHUB_STEP_SUMMARY is text-only, so the chosen image
-      # can't ride along in it — upload the actual PNG (an absolute path on
-      # the runner, written by post.mjs to $GITHUB_OUTPUT) as a downloadable
-      # artifact instead.
-      - name: Upload dry-run preview image
-        if: success() && github.event.inputs.dry-run == 'true' && steps.post.outputs.image_path != ''
+      # Dry-run only: GITHUB_STEP_SUMMARY is text-only, so the chosen image(s)
+      # can't ride along in it — upload the actual PNGs (absolute paths on the
+      # runner, written by post.mjs to $GITHUB_OUTPUT, one per line when a
+      # push bundles multiple changes) as a downloadable artifact instead.
+      - name: Upload dry-run preview image(s)
+        if: success() && github.event.inputs.dry-run == 'true' && steps.post.outputs.image_paths != ''
         uses: actions/upload-artifact@v4
         with:
           name: auto-post-dry-run-preview
-          path: ${{ steps.post.outputs.image_path }}
+          path: ${{ steps.post.outputs.image_paths }}
           retention-days: 7
 
       - name: Persist post history
