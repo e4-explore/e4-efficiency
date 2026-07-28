@@ -2,7 +2,9 @@
 
 A Claude Code skill that drops a "self-marketer" into any GitHub repo. Every
 merge to `main` becomes a short, in-voice post on X with a screenshot of the
-change — no human in the loop.
+change — or, when the change is an interaction (drag/reorder, expand, tab
+switch, hover reveal), a short screen recording of that interaction — no human
+in the loop.
 
 Built for builders who'd rather ship than tweet.
 
@@ -25,12 +27,17 @@ When a commit lands on `main`:
    picks the best of the full page, an element close-up, and the interactive
    frames. (Interaction never triggers mutating/financial/account/send
    actions; on by default, steerable per repo with `interaction-hints`.)
+   A change the model flags as an interaction/motion is instead *recorded*: it
+   drives the real interaction (drag a row to reorder, expand a panel, switch a
+   tab) with a synthetic cursor and saves a short mp4 (needs ffmpeg — present on
+   GitHub-hosted runners; falls back to a still otherwise). On by default,
+   disable with `interaction-videos: false`.
 4. A vision pass verifies each image actually shows its change; if it doesn't,
    the model maps that change's files to the repo's route files to find where
    it renders and retries there. A change whose shots all fail is dropped
    (its line still posts, just without an image) rather than failing the run.
-5. Up to 4 images (X's own per-post limit) are uploaded to X and the post is
-   published with all of them attached.
+5. Up to 4 images (X's own per-post limit) — or a single video (X allows either,
+   never both) — are uploaded to X and the post is published with them attached.
 
 ## Install
 
@@ -153,6 +160,10 @@ line — same statement rules, no connective words between them.
 - ✅ Interactive shots: a bounded, vision-driven loop drives the page (clicks,
   hovers, theme/tab toggles, opening menus) to reach a compelling state and
   captures the best frame — safety-gated against destructive/financial actions
+- ✅ Interaction videos: a change flagged as interaction/motion (drag/reorder,
+  expand, tab switch, hover reveal) is recorded — the loop drives the real
+  interaction with a synthetic cursor and posts a short mp4 instead of a still
+  (needs ffmpeg; falls back to a still). On by default (`interaction-videos`)
 - ✅ Vision verification: a shot that doesn't visibly show the change triggers
   a widened route search over the repo's page files before falling back
 - ✅ Bundled changes: a push with a few distinct, separately-noticeable

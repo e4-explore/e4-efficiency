@@ -123,6 +123,12 @@ jobs:
           # theme and composed example screens").
           INTERACTIVE_SHOTS: ${{ vars.INTERACTIVE_SHOTS }}
           INTERACTION_HINTS: ${{ vars.INTERACTION_HINTS }}
+          # Interaction/motion changes (drag/reorder, expand, tab switch, hover
+          # reveal…) are captured as a short screen recording (mp4) instead of a
+          # still, driven with a synthetic cursor. On by default; needs ffmpeg
+          # (present on GitHub-hosted runners) + interactive shots. Set repo
+          # variable INTERACTION_VIDEOS=false to always post stills.
+          INTERACTION_VIDEOS: ${{ vars.INTERACTION_VIDEOS }}
           # A push can bundle several distinct changes; this caps how many get
           # their own image/line in the post (1-4, hard-capped at 4 — X's own
           # limit). Set repo variable MAX_BUNDLE_IMAGES to override the default.

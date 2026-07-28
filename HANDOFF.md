@@ -30,19 +30,29 @@ Commit + merged-PR + recent-commit context → Gemini segments the push into
 1-4 distinct changes (most pushes are one coherent change and collapse to
 exactly one; a push bundling a few separate tweaks gets one item per change,
 capped at `max-bundle-images`, default 4 — X's own per-post image limit), each
-with its own one-line draft (what changed + why), candidate routes, and
-changed-element hint (model-fallback chain) → per change: image (cover.png
-[always singular] | local preview build | deployed site, deploy-gated) →
-vision picks best screenshot → element close-up when the changed component
-can be located → optional interactive browse (bounded vision loop drives the
-page via clicks/hovers/selects to reach a compelling state, safety-gated
-against mutating/financial/account/send actions; smaller step/time budget per
-change when bundling more than one) → vision picks best of {full page,
-close-up, interactive frames} → vision verification scoped to that change's
-own files, with one widened route search on a miss (a change whose shots all
-fail is dropped — its line still posts, no image, not fatal) → editor pass on
-the assembled multi-line draft vs. rubric + history → post to X with up to 4
-images attached → append `history.jsonl`, committed back as a real-account
+with its own one-line draft (what changed + why), candidate routes,
+changed-element hint, and a `capture` flag (`image` | `video`) (model-fallback
+chain) → per change, EITHER:
+  • image (cover.png [always singular] | local preview build | deployed site,
+    deploy-gated) → vision picks best screenshot → element close-up when the
+    changed component can be located → optional interactive browse (bounded
+    vision loop drives the page via clicks/hovers/selects to reach a compelling
+    state, safety-gated against mutating/financial/account/send actions; smaller
+    step/time budget per change when bundling more than one) → vision picks best
+    of {full page, close-up, interactive frames} → vision verification scoped to
+    that change's own files, with one widened route search on a miss; OR
+  • video (change flagged `capture:"video"` — an interaction/motion a still
+    can't convey): a dedicated recording context + bounded vision loop navigates
+    to the screen and drives the ONE showcase interaction (drag/reorder, expand,
+    tab switch, hover reveal) with a synthetic cursor (Playwright video doesn't
+    capture the OS cursor), trimmed to the interaction window and transcoded to
+    an X-friendly mp4 via ffmpeg; falls back to the still pipeline on no ffmpeg /
+    nav miss / unverified final frame / any error.
+A change whose capture all fails is dropped (its line still posts, no media, not
+fatal) → editor pass on the assembled multi-line draft vs. rubric + history →
+post to X with EITHER up to 4 images OR a single video (X allows either, never a
+mix — a video wins and other media is dropped, text lines kept; `pickPostMedia`
+enforces this) → append `history.jsonl`, committed back as a real-account
 identity.
 
 ## Released
@@ -55,9 +65,14 @@ identity.
 
 Learns from its own output (rubric + history), not engagement (likes/impressions
 — needs X analytics beyond the free tier). No approval queue, no chore
-filtering, single voice, single X account per repo, no video posts. Commit
-batching (multiple distinct changes → multiple images, one post) shipped —
-see Pipeline above.
+filtering, single voice, single X account per repo. Commit batching (multiple
+distinct changes → multiple images, one post) and interaction video posts
+(drag/reorder/expand/tab/hover captured as an mp4 with a synthetic cursor)
+shipped — see Pipeline above. Video is on by default (`interaction-videos`
+input / `INTERACTION_VIDEOS` var to disable); it needs ffmpeg on PATH (present
+on GitHub-hosted runners) and falls back to a still otherwise. Spotlight/zoom
+production polish on the recorded clip is a possible follow-up (v1 is
+cursor-only).
 
 ## Open follow-ups
 

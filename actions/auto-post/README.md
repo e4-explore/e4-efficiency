@@ -1,9 +1,11 @@
 # auto-post composite action
 
-Reference this from any repo to auto-post a merge to X with a screenshot. It
-bundles the whole pipeline (`post.mjs`), so consumers keep only a thin caller
-workflow instead of vendoring the script — pin a version tag and updates
-propagate automatically.
+Reference this from any repo to auto-post a merge to X with a screenshot — or,
+for an interaction/motion change (drag/reorder, expand, tab switch, hover
+reveal), a short screen recording that drives the real interaction with a
+synthetic cursor. It bundles the whole pipeline (`post.mjs`), so consumers keep
+only a thin caller workflow instead of vendoring the script — pin a version tag
+and updates propagate automatically.
 
 ## Usage
 
@@ -77,6 +79,7 @@ of parent order.
 | `routes` | no | `''` | JSON array of route paths to hint the screenshotter. |
 | `interactive-shots` | no | `'true'` | Let the screenshotter click/hover/select navigational + display controls to drive the page to a more compelling state before shooting. Never triggers mutating/financial/account/send actions. `'false'` = shoot routes as-loaded. |
 | `interaction-hints` | no | `''` | Free-text steering for interactive shots, e.g. `"Prefer a branded theme and composed example screens over atomic component stories."` |
+| `interaction-videos` | no | `'true'` | A change the model flags as an interaction/motion (drag/reorder, expand/collapse, tab switch, hover reveal, animation) is captured as a short screen recording (mp4) with a synthetic cursor instead of a still. Needs ffmpeg (present on GitHub-hosted runners) + `interactive-shots`; falls back to a still on any trouble. `'false'` = always stills. |
 | `max-bundle-images` | no | `'4'` | A push can bundle several distinct changes (e.g. a few small fixes made alongside one main feature); this caps how many get their own image/line in the post, 1-4. Hard-capped at 4 (X's own max images per post). Most pushes are one coherent change and get exactly 1 either way. |
 | `include-commit-link` | no | `'false'` | Append the commit URL to the post. |
 | `gemini-model` | no | `''` | Pin a model id; else the fallback chain is used. |

@@ -23,12 +23,17 @@
 //        c. homepage URL    — screenshot the deployed site
 //      When several routes are shot, Gemini vision picks the most engaging;
 //      it can also drive the page (click/hover/select) toward a better state.
-//      A change whose shots all fail is dropped (text-only), not fatal.
+//      A change the model tags as an interaction/motion (drag/reorder, expand,
+//      tab switch, hover reveal…) is instead RECORDED: a vision loop drives the
+//      real interaction with a synthetic cursor, trimmed+transcoded to mp4
+//      (falls back to a still on no ffmpeg / nav miss / any error).
+//      A change whose capture all fails is dropped (text-only), not fatal.
 //   4. Editor pass: Gemini critiques the assembled draft against an
 //      engagement rubric + recent post history, then rewrites it.
-//   5. Post to X with up to 4 images (X's own per-post limit). Append to
-//      history.jsonl (the workflow commits it back so future runs learn from
-//      past posts).
+//   5. Post to X with up to 4 images, OR a single video (X allows either, never
+//      a mix — a video wins and other media is dropped, text lines kept).
+//      Append to history.jsonl (the workflow commits it back so future runs
+//      learn from past posts).
 //
 // Edit VOICE to retune tone; edit RUBRIC to retune the editor.
 //
@@ -122,6 +127,18 @@ export function extractJsonObject(text) {
     }
   }
   throw new Error('Unbalanced JSON object.');
+}
+
+// X media rules: a post carries EITHER up to 4 images OR a single video, never
+// a mix. Given the per-change media list (ordered most-user-facing first),
+// return what actually gets attached: the first video alone if any change
+// produced one, else up to 4 images. droppedForVideo reports how many items the
+// single-video rule shed (their text lines still post).
+export function pickPostMedia(media) {
+  const list = Array.isArray(media) ? media.filter((m) => m && m.file) : [];
+  const firstVideo = list.find((m) => m.type === 'video');
+  if (firstVideo) return { items: [firstVideo], droppedForVideo: list.length - 1 };
+  return { items: list.slice(0, 4), droppedForVideo: 0 };
 }
 
 function envBool(name, fallback) {
@@ -644,6 +661,296 @@ Return ONLY JSON:
   return { file: imagePath, note: imageNote };
 }
 
+// ---------------------------------------------------------------- interaction video
+
+// Playwright's video recorder does NOT capture the OS cursor, so a recorded
+// drag looks like rows moving by themselves. We draw a synthetic pointer in the
+// page's top frame and move it in lockstep with page.mouse. Coordinates are
+// main-frame viewport pixels (what page.mouse and locator.boundingBox() both
+// use), so the overlay lines up even when the real UI is inside an iframe
+// (Storybook's preview frame is the motivating case).
+const CURSOR_JS = `(() => {
+  if (window.__apCursorInstalled) return;
+  window.__apCursorInstalled = true;
+  const c = document.createElement('div');
+  c.id = '__ap_cursor';
+  c.style.cssText = 'position:fixed;left:-100px;top:-100px;z-index:2147483647;pointer-events:none;width:26px;height:26px;transform-origin:2px 2px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.35));transition:transform .05s ease-out';
+  c.innerHTML = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 2.5l13 6.5-5.4 1.4L9.6 17 5 2.5z" fill="#111827" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+  document.documentElement.appendChild(c);
+  // Dragging across text would paint an ugly selection highlight in the
+  // recording on any page that doesn't guard it — suppress selection globally
+  // (harmless for an unattended screenshotter) so clips stay clean.
+  const s = document.createElement('style');
+  s.textContent = '*{-webkit-user-select:none!important;user-select:none!important}';
+  document.head.appendChild(s);
+  window.__apMoveCursor = (x, y) => { c.style.left = x + 'px'; c.style.top = y + 'px'; };
+  window.__apPressCursor = (down) => { c.style.transform = down ? 'scale(.8)' : 'scale(1)'; };
+})()`;
+
+export async function ensureCursor(page) {
+  try { await page.evaluate(CURSOR_JS); } catch { /* page mid-navigation; retried next call */ }
+}
+
+export const boxCenter = (b) => (b ? { x: b.x + b.width / 2, y: b.y + b.height / 2 } : null);
+
+export async function apMove(page, x, y) {
+  await page.mouse.move(x, y);
+  await page.evaluate(([px, py]) => window.__apMoveCursor && window.__apMoveCursor(px, py), [x, y]).catch(() => {});
+}
+
+// Animated, eased drag with the synthetic cursor tracking every step so the
+// recording reads as a real hand-drag (press -> move -> settle -> release).
+export async function apDrag(page, from, to, { steps = 26, holdMs = 150 } = {}) {
+  await ensureCursor(page);
+  await apMove(page, from.x, from.y);
+  await sleep(220);
+  await page.mouse.down();
+  await page.evaluate(() => window.__apPressCursor && window.__apPressCursor(true)).catch(() => {});
+  await sleep(holdMs);
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; // easeInOutQuad
+    await apMove(page, from.x + (to.x - from.x) * e, from.y + (to.y - from.y) * e);
+    await sleep(22);
+  }
+  await sleep(180);
+  await page.mouse.up();
+  await page.evaluate(() => { window.__apPressCursor && window.__apPressCursor(false); window.getSelection && window.getSelection().removeAllRanges(); }).catch(() => {});
+  await sleep(550); // let the drop animation land
+}
+
+// Like snapshotInteractives, but also offers structural "draggable candidates"
+// (list rows, drag handles, sortable items) so the model can pick a drag
+// source/target — those are usually plain <li>/<div>s the interactive tagger
+// skips. Tagged with the same data-autopost-ref attribute refLocator resolves.
+export async function snapshotForRecorder(page) {
+  const tagger = (frameIndex) => {
+    const INTERACT = 'a,button,select,summary,[role=button],[role=tab],[role=menuitem],[role=menuitemradio],[role=switch],[role=link],[role=option],[aria-haspopup]';
+    const DRAG = '[draggable=true],[aria-roledescription*="drag" i],[class*="drag" i],[class*="sortable" i],[class*="handle" i],[role=listitem],[role=row],li';
+    const items = [];
+    let i = 0;
+    const consider = (el, draggable) => {
+      if (el.hasAttribute('data-autopost-ref')) return;
+      const r = el.getBoundingClientRect();
+      const st = getComputedStyle(el);
+      const visible = r.width > 2 && r.height > 2 && r.bottom > 0 && r.top < innerHeight
+        && r.right > 0 && r.left < innerWidth
+        && st.visibility !== 'hidden' && st.display !== 'none' && st.pointerEvents !== 'none';
+      if (!visible) return;
+      const name = (el.getAttribute('aria-label') || el.innerText || el.value || el.getAttribute('title') || '')
+        .trim().replace(/\s+/g, ' ').slice(0, 80);
+      if (!name) return;
+      el.setAttribute('data-autopost-ref', `${frameIndex}:${i}`);
+      const item = { ref: `${frameIndex}:${i}`, tag: el.tagName.toLowerCase(), role: el.getAttribute('role') || null, name, draggable: !!draggable };
+      if (el.tagName === 'SELECT') item.options = [...el.options].map((o) => o.value).slice(0, 12);
+      items.push(item);
+      i++;
+    };
+    for (const el of document.querySelectorAll(INTERACT)) { if (i >= 60) break; consider(el, false); }
+    for (const el of document.querySelectorAll(DRAG)) { if (i >= 90) break; consider(el, true); }
+    return items;
+  };
+  const frames = page.frames();
+  const all = [];
+  for (let f = 0; f < frames.length; f++) {
+    try { all.push(...await frames[f].evaluate(tagger, f)); } catch { /* cross-origin/detached */ }
+    if (all.length >= 90) break;
+  }
+  return all;
+}
+
+// Trim [startSec, endSec] out of a Playwright .webm and transcode to an
+// X-friendly mp4 (H.264/yuv420p, even dimensions, faststart, no audio).
+// Resolves false on any failure — notably when ffmpeg isn't on PATH — so the
+// caller can fall back to the still-image pipeline.
+export function ffmpegToMp4(inPath, outPath, startSec, endSec) {
+  return new Promise((resolve) => {
+    const dur = Math.max(0.5, endSec - startSec);
+    const args = [
+      '-y', '-i', inPath,
+      '-ss', startSec.toFixed(2), '-t', dur.toFixed(2),
+      '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=30',
+      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-an',
+      outPath,
+    ];
+    let proc;
+    try { proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] }); }
+    catch (err) { console.warn(`ffmpeg unavailable: ${err.message}`); return resolve(false); }
+    let stderr = '';
+    proc.stderr.on('data', (d) => { stderr += d.toString(); });
+    proc.on('error', (err) => { console.warn(`ffmpeg failed to start: ${err.message}`); resolve(false); });
+    proc.on('close', (code) => {
+      if (code === 0) return resolve(true);
+      console.warn(`ffmpeg exited ${code}: ${stderr.slice(-400)}`);
+      resolve(false);
+    });
+  });
+}
+
+// Records a short clip of ONE interaction change: a dedicated recording context,
+// a bounded vision loop that first navigates to the right screen then performs
+// the single showcase interaction (drag/reorder, expand, tab switch, hover
+// reveal...) with a synthetic cursor, then trims+transcodes the clip to mp4.
+// Returns { type:'video', file, note } or null — on no ffmpeg, a navigation
+// miss the final frame can't confirm, or any error — so the caller falls back
+// to the still-image pipeline for this change.
+async function recordInteractionVideo(browser, baseUrl, change, shared, tag) {
+  const { commitMessage, interactionHints } = shared;
+  const clause = change.clause;
+  const interactionHint = typeof change.interaction_hint === 'string' ? change.interaction_hint.trim() : '';
+  const candidates = (Array.isArray(change.candidate_paths) && change.candidate_paths.length ? change.candidate_paths : ['/'])
+    .slice(0, 3).map((p) => (typeof p === 'string' && p.trim() ? p.trim() : '/'));
+  const startUrl = new URL(candidates[0], baseUrl).toString();
+
+  const dir = join(tmpdir(), `auto-post-vid-${tag}`);
+  mkdirSync(dir, { recursive: true });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, recordVideo: { dir, size: { width: 1280, height: 800 } } });
+  const page = await context.newPage();
+  let video = null;
+  let captureStart = null;
+  let captureEnd = null;
+  let finalFrame = null;
+  const t0 = Date.now();
+  const elapsed = () => (Date.now() - t0) / 1000;
+  const history = [];
+  const hintLine = interactionHints ? `\nOWNER HINTS: ${interactionHints}` : '';
+
+  try {
+    await page.goto(startUrl, { waitUntil: 'networkidle', timeout: 30_000 }).catch(async () => {
+      await page.goto(startUrl, { waitUntil: 'load', timeout: 30_000 });
+    });
+    video = page.video();
+
+    const deadline = Date.now() + 90_000;
+    for (let step = 0; step < 6 && Date.now() < deadline; step++) {
+      await ensureCursor(page);
+      const offered = (await snapshotForRecorder(page)).filter((it) => !UNSAFE_ACTION_NAME.test(it.name)).slice(0, 44);
+      if (!offered.length) break;
+
+      const frameFile = join(tmpdir(), `auto-post-vidframe-${tag}-${step}.png`);
+      await page.screenshot({ path: frameFile, fullPage: false });
+
+      let decision;
+      try {
+        decision = await gemini([
+          {
+            text: `You are driving a real web page to make a SHORT SCREEN RECORDING that shows off one UI interaction for a social post. First navigate (click/hover/select) to the screen where it happens, then perform the SINGLE interaction that best demonstrates the change — e.g. drag a list row to reorder it, expand/collapse a panel, switch a tab, hover to reveal actions. A synthetic cursor is drawn for you; just choose actions.
+
+POST DRAFT: ${clause}
+INTERACTION TO SHOW: ${interactionHint || '(infer from the draft + commit)'}
+COMMIT MESSAGE: ${commitMessage}${hintLine}
+
+ACTIONS SO FAR: ${history.length ? history.join(' | ') : '(none yet)'}
+
+The attached screenshot is the CURRENT state. Elements you may act on (pick by "ref"; "draggable":true marks list rows / drag handles you can drag):
+${offered.map((it) => `- ${it.ref} [${it.role || it.tag}]${it.draggable ? ' draggable' : ''} "${it.name}"${it.options ? ` options=${JSON.stringify(it.options)}` : ''}`).join('\n')}
+
+Rules: only navigational/display actions to get there; then ONE showcase interaction. Never submit forms, buy, delete, or send anything. Set "is_capture": true ONLY on the single showcase-interaction step, never on a navigation step. Once the showcase interaction is done, stop with "done": true.
+Return ONLY JSON:
+{
+  "done": boolean,
+  "action": "drag" | "click" | "hover" | "select" | null,
+  "ref": string | null,       // source element
+  "to_ref": string | null,    // drag target element (drag only; the row to drop onto/past)
+  "dy": number | null,        // fallback drag distance in px if no to_ref (positive = down)
+  "value": string | null,     // option value for select
+  "is_capture": boolean,      // true only on the showcase interaction
+  "reason": string
+}`,
+          },
+          { inline_data: { mime_type: 'image/png', data: readFileSync(frameFile).toString('base64') } },
+        ]);
+      } catch (err) {
+        console.warn(`Recorder decision failed (${err.message}); stopping.`);
+        break;
+      }
+
+      if (decision.done || !decision.action || !decision.ref) {
+        console.log(`Recorder: model stopped — ${decision.reason ?? 'no reason'}`);
+        break;
+      }
+      const picked = offered.find((it) => it.ref === decision.ref);
+      const src = refLocator(page, decision.ref);
+      if (!picked || !src) { console.warn(`Recorder: ref ${decision.ref} unusable; stopping.`); break; }
+
+      const isCapture = decision.is_capture === true;
+      if (isCapture && captureStart === null) captureStart = elapsed();
+      try {
+        if (decision.action === 'drag') {
+          const from = boxCenter(await src.boundingBox());
+          if (!from) { console.warn('Recorder: drag source has no box; stopping.'); break; }
+          let to = null;
+          if (decision.to_ref) {
+            const dst = refLocator(page, decision.to_ref);
+            if (dst) to = boxCenter(await dst.boundingBox().catch(() => null));
+          }
+          if (!to) to = { x: from.x, y: from.y + (Number.isFinite(decision.dy) && decision.dy ? decision.dy : 140) };
+          await apDrag(page, from, to);
+        } else if (decision.action === 'hover') {
+          const b = boxCenter(await src.boundingBox());
+          if (b) await apMove(page, b.x, b.y);
+          await src.hover({ timeout: 8000 });
+          await sleep(700);
+        } else if (decision.action === 'select') {
+          await src.selectOption(decision.value ?? '', { timeout: 8000 });
+          await sleep(600);
+        } else {
+          const b = boxCenter(await src.boundingBox());
+          if (b) { await apMove(page, b.x, b.y); await sleep(150); }
+          await src.click({ timeout: 8000 });
+          await sleep(600);
+        }
+        history.push(`${decision.action} "${picked.name}"`);
+        console.log(`Recorder step ${step}: ${decision.action} "${picked.name}"${isCapture ? ' [capture]' : ''} — ${decision.reason ?? ''}`);
+        await page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
+      } catch (err) {
+        console.warn(`Recorder action failed (${err.message}); stopping.`);
+        break;
+      }
+      if (isCapture) captureEnd = elapsed();
+    }
+
+    await sleep(400);
+    finalFrame = join(tmpdir(), `auto-post-vidfinal-${tag}.png`);
+    await page.screenshot({ path: finalFrame, fullPage: false }).catch(() => { finalFrame = null; });
+  } finally {
+    // Closing the context finalizes the .webm; grab its path afterwards.
+    await page.close().catch(() => {});
+    await context.close().catch(() => {});
+  }
+
+  const totalDur = elapsed();
+  let webm = null;
+  try { webm = video ? await video.path() : null; } catch { webm = null; }
+  if (!webm || !existsSync(webm)) {
+    console.warn(`Recorder: no clip produced for "${clause}".`);
+    return null;
+  }
+  if (captureStart === null) {
+    // The model never flagged a showcase step (e.g. couldn't reach the screen).
+    // Don't ship a video of aimless navigation — fall back to a still.
+    console.warn(`Recorder: no showcase interaction captured for "${clause}"; falling back to image.`);
+    return null;
+  }
+
+  const mp4 = join(tmpdir(), `auto-post-video-${tag}.mp4`);
+  const trimStart = Math.max(0, captureStart - 0.6);
+  const trimEnd = Math.min(totalDur, (captureEnd ?? totalDur) + 0.8);
+  const ok = await ffmpegToMp4(webm, mp4, trimStart, trimEnd);
+  if (!ok || !existsSync(mp4)) {
+    console.warn(`Recorder: mp4 conversion failed for "${clause}"; falling back to image.`);
+    return null;
+  }
+  // Guard the original failure mode: if the final frame doesn't actually show
+  // the change (e.g. we recorded a drag on the wrong screen), don't post it.
+  if (finalFrame && !(await shotShowsChange(finalFrame, clause, commitMessage))) {
+    console.warn(`Recorder: final frame doesn't show the change for "${clause}"; falling back to image.`);
+    return null;
+  }
+  console.log(`Recorder: captured ${(trimEnd - trimStart).toFixed(1)}s clip for "${clause}".`);
+  return { type: 'video', file: mp4, note: `screen recording of the interaction on ${startUrl}` };
+}
+
 // Best-effort list of files that define routes/pages in the consumer repo, so
 // the model can find where a changed component actually renders when the
 // first screenshot round misses.
@@ -724,6 +1031,14 @@ async function main() {
   const interactionHints = (process.env.INTERACTION_HINTS && process.env.INTERACTION_HINTS.trim())
     || (typeof config.interactionHints === 'string' ? config.interactionHints.trim() : '')
     || '';
+
+  // Interaction videos: when a change is fundamentally an interaction/motion
+  // (drag/reorder, expand, tab switch, hover reveal…), record a short clip of
+  // the actual interaction instead of a still (on by default; needs ffmpeg on
+  // PATH — present on GitHub-hosted runners — else it falls back to a still).
+  // Also requires interactive shots (both drive the page). Its own kill-switch
+  // so video can be disabled without turning off the validated interactive stills.
+  const INTERACTION_VIDEOS = envBool('INTERACTION_VIDEOS', config.interactionVideos ?? true);
 
   // A push can bundle several distinct changes (one feature at a time is the
   // common case and still gets exactly one image); this caps how many get
@@ -882,7 +1197,7 @@ giving it its own.
 
 PROJECT
 - Repo: ${GITHUB_REPOSITORY}${routesHint}
-${USE_COVER ? '- Image: a static cover image already chosen by the project owner will be attached (same image regardless of how many changes are found).' : '- Screenshots of the app will be taken per change; you choose which routes to try for each.'}
+${USE_COVER ? '- Image: a static cover image already chosen by the project owner will be attached (same image regardless of how many changes are found).' : '- A screenshot — or, for an interaction/motion change, a short screen recording — of the app will be captured per change; you choose which routes to try for each and mark which changes are interactions (capture: "video").'}
 
 COMMIT
 - Message: ${commitMessage}
@@ -903,7 +1218,14 @@ ${wantRoutes ? `      "candidate_paths": string[],  // 1 to 3 URL paths most lik
       "element_hint": {              // the single UI element THIS change is visible in (for a zoomed-in shot)
         "text": string | null,       // short distinguishing text rendered inside it, exactly as a user sees it
         "selector": string | null    // a CSS selector for it if the diff makes one obvious, else null
-      } | null                       // null when no single element visibly changed
+      } | null,                      // null when no single element visibly changed
+      "capture": "image" | "video",  // "video" ONLY when THIS change is fundamentally an interaction or motion a
+                                     // still can't convey: drag/drop, reorder/sortable, expand/collapse, tab switch,
+                                     // hover reveal, animation, transition. Static changes (copy, color, layout, a
+                                     // new element) are "image". When unsure, "image".
+      "interaction_hint": string | null  // when "video": one short phrase for the interaction to perform on screen,
+                                     // e.g. "drag a list row by its handle to reorder it", "hover a card to reveal
+                                     // the actions", "switch to the second tab". null when "image".
 ` : ''}    }
   ]
 }`,
@@ -922,14 +1244,15 @@ ${wantRoutes ? `      "candidate_paths": string[],  // 1 to 3 URL paths most lik
 
   let imagePaths = [];
   let imageNotes = []; // human-readable descriptions, same order as imagePaths
+  let mediaTypes = []; // 'image' | 'video', same order as imagePaths
   let previewProc = null;
 
   try {
+    let media = []; // { type: 'image'|'video', file, note }, one per captured change (in order)
     if (USE_COVER) {
       // Static cover is always singular — one image regardless of how many
       // changes were found; there's nothing per-change to screenshot.
-      imagePaths = [COVER_PATH];
-      imageNotes = ['static cover image'];
+      media = [{ type: 'image', file: COVER_PATH, note: 'static cover image' }];
     } else {
       const { chromium } = await import('playwright');
 
@@ -974,17 +1297,41 @@ ${wantRoutes ? `      "candidate_paths": string[],  // 1 to 3 URL paths most lik
         };
 
         for (const [i, change] of changes.entries()) {
-          const resolved = await resolveChangeImage(ctx, baseUrl, REPO_ROOT, change, shared, `c${i}`);
-          if (resolved) {
-            imagePaths.push(resolved.file);
-            imageNotes.push(resolved.note);
+          const tag = `c${i}`;
+          let resolved = null;
+          // Interaction/motion changes get a short screen recording instead of a
+          // still — a drag/reorder/expand/tab can't be conveyed in one frame.
+          // recordInteractionVideo returns null (no ffmpeg, nav miss, unverified,
+          // any error) to hand off to the normal image pipeline for this change.
+          if (INTERACTIVE_SHOTS && INTERACTION_VIDEOS && change.capture === 'video') {
+            resolved = await recordInteractionVideo(browser, baseUrl, change, shared, tag).catch((err) => {
+              console.warn(`Change "${change.clause}": video capture errored (${err.message}); falling back to image.`);
+              return null;
+            });
           }
+          if (!resolved) {
+            const img = await resolveChangeImage(ctx, baseUrl, REPO_ROOT, change, shared, tag);
+            if (img) resolved = { type: 'image', file: img.file, note: img.note };
+          }
+          if (resolved) media.push(resolved);
         }
-        if (!imagePaths.length) throw new Error('Every candidate screenshot failed for every bundled change.');
+        if (!media.length) throw new Error('Every candidate capture failed for every bundled change.');
       } finally {
         await browser.close();
       }
     }
+
+    // X media rules: a post carries EITHER up to 4 images OR a single video,
+    // never a mix. When any change produced a video, post that one video (the
+    // changes are ordered most-user-facing first) with the full multi-line text;
+    // otherwise attach up to 4 images exactly as before.
+    const picked = pickPostMedia(media);
+    if (picked.droppedForVideo > 0) {
+      console.warn(`X allows a single video with no other media; posting the video and dropping ${picked.droppedForVideo} other media item(s) — their text lines still post.`);
+    }
+    imagePaths = picked.items.map((m) => m.file);
+    imageNotes = picked.items.map((m) => m.note);
+    mediaTypes = picked.items.map((m) => m.type);
 
     // ---- 4. editor pass ----
 
@@ -1031,13 +1378,17 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
     }
     console.log('Final post:', finalText);
 
-    // X allows at most 4 images per post; MAX_BUNDLE_IMAGES already caps
-    // `changes` at 4, but a defensive slice here costs nothing.
+    // X allows at most 4 images per post (or a single video); pickPostMedia
+    // already enforced that, but a defensive slice here costs nothing.
     imagePaths = imagePaths.slice(0, 4);
     imageNotes = imageNotes.slice(0, imagePaths.length);
-    const imagesSummaryLine = imageNotes.length > 1
-      ? `**Images:**\n${imageNotes.map((n, i) => `${i + 1}. ${n}`).join('\n')}`
-      : `**Image:** ${imageNotes[0] ?? '(none)'}`;
+    mediaTypes = mediaTypes.slice(0, imagePaths.length);
+    const postingVideo = mediaTypes[0] === 'video';
+    const imagesSummaryLine = postingVideo
+      ? `**Video:** ${imageNotes[0] ?? '(none)'}`
+      : imageNotes.length > 1
+        ? `**Images:**\n${imageNotes.map((n, i) => `${i + 1}. ${n}`).join('\n')}`
+        : `**Image:** ${imageNotes[0] ?? '(none)'}`;
 
     if (DRY_RUN) {
       // Preview mode: everything ran except the publish. Nothing is written to
@@ -1047,7 +1398,7 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
       // caller workflow can upload them as downloadable artifacts —
       // GITHUB_STEP_SUMMARY is text-only, it can't carry the actual PNGs off
       // the ephemeral runner.
-      console.log(`DRY RUN — not publishing to X. Would post with ${imagePaths.length} image(s): ${imageNotes.join(' | ')}`);
+      console.log(`DRY RUN — not publishing to X. Would post with ${imagePaths.length} ${postingVideo ? 'video' : 'image(s)'}: ${imageNotes.join(' | ')}`);
       const output = process.env.GITHUB_OUTPUT;
       if (output && imagePaths.length) {
         // Multiline GITHUB_OUTPUT values need the <<DELIM ... DELIM heredoc form.
@@ -1077,9 +1428,15 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
         accessSecret: X_ACCESS_TOKEN_SECRET,
       });
 
+      // Image uploads are unchanged from the validated path (mimeType
+      // image/png); a video item uploads as video/mp4 instead — twitter-api-v2
+      // handles the chunked INIT/APPEND/FINALIZE + processing wait for videos.
+      // pickPostMedia guarantees imagePaths is either up-to-4 images or exactly
+      // one video, never a mix.
       const mediaIds = [];
-      for (const p of imagePaths) {
-        mediaIds.push(await twitter.v1.uploadMedia(p, { mimeType: 'image/png' }));
+      for (let k = 0; k < imagePaths.length; k++) {
+        const mimeType = mediaTypes[k] === 'video' ? 'video/mp4' : 'image/png';
+        mediaIds.push(await twitter.v1.uploadMedia(imagePaths[k], { mimeType }));
       }
       const tweet = await twitter.v2.tweet({ text: finalText, media: { media_ids: mediaIds } });
       console.log('Posted tweet id:', tweet.data.id);

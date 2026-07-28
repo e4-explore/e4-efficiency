@@ -1,0 +1,6 @@
+# Action deps are installed in CI (npm install), never committed.
+node_modules/
+package-lock.json
+
+# OS / editor cruft
+.DS_Store

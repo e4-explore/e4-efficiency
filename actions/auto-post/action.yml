@@ -35,6 +35,10 @@ inputs:
     description: 'Optional free-text steering for interactive shots, e.g. "Prefer a branded (non-wireframe) theme and composed example screens over atomic component stories."'
     required: false
     default: ''
+  interaction-videos:
+    description: 'When "true" (default), a change the model flags as an interaction/motion (drag/reorder, expand/collapse, tab switch, hover reveal, animation) is captured as a short screen recording (mp4) instead of a still — the interaction is driven with a synthetic cursor. Needs ffmpeg (present on GitHub-hosted runners) and interactive-shots enabled; falls back to a still on any trouble. Set "false" to always post stills.'
+    required: false
+    default: 'true'
   max-bundle-images:
     description: 'A push can bundle several distinct changes (e.g. a few small fixes made alongside one main feature); this caps how many get their own image/line in the post, 1-4. Hard-capped at 4 (X''s own max images per post) regardless of this value. Most pushes are one coherent change and get exactly 1 image either way.'
     required: false
@@ -147,6 +151,7 @@ runs:
         ROUTES: ${{ inputs.routes }}
         INTERACTIVE_SHOTS: ${{ inputs.interactive-shots }}
         INTERACTION_HINTS: ${{ inputs.interaction-hints }}
+        INTERACTION_VIDEOS: ${{ inputs.interaction-videos }}
         MAX_BUNDLE_IMAGES: ${{ inputs.max-bundle-images }}
         INCLUDE_COMMIT_LINK: ${{ inputs.include-commit-link }}
         GEMINI_MODEL: ${{ inputs.gemini-model }}
