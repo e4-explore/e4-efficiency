@@ -20,16 +20,17 @@ When a commit lands on `main`:
    change, most user-facing first — using the merged PR's title/body and
    recent commit history for the "why", plus candidate paths per change on
    your deployed site most likely to show it.
-3. Playwright + Chromium screenshots those paths per change. It can also
-   *drive* the page — clicking/hovering/selecting/typing on navigational and
-   display controls to reach the state that shows the change: it will type a
-   component's name into a catalog search box to jump straight to it, focus a
-   field or open a dropdown to reveal a focus/open-state change, and prefers a
-   frame-filling all-variants view over a lone element on an empty canvas —
-   capturing a frame after each step, then picking the best of the full page, an
-   element close-up, and the interactive frames. (Never triggers
-   mutating/financial/account/send actions; on by default, steerable per repo
-   with `interaction-hints`.)
+3. Playwright + Chromium screenshots those paths per change. It also *drives*
+   the page to the affected component: a deterministic navigation step (works on
+   any catalog/SPA — types the component's name into a search/filter box and
+   clicks the result, or clicks the nav item, expanding collapsed groups until it
+   appears, then confirms it actually arrived) runs first, then a vision loop
+   refines the state — focusing a field or opening a dropdown to reveal a
+   focus/open-state change, preferring a frame-filling all-variants view over a
+   lone element on an empty canvas — capturing a frame after each step and
+   picking the best of the full page, an element close-up, and the interactive
+   frames. (Never triggers mutating/financial/account/send actions; on by
+   default, steerable per repo with `interaction-hints`.)
    A change the model flags as an interaction/motion is instead *recorded*: it
    drives the real interaction (drag a row to reorder, expand a panel, switch a
    tab) with a synthetic cursor and saves a short mp4 (needs ffmpeg — present on

@@ -445,6 +445,10 @@ export async function snapshotInteractives(page) {
       el.setAttribute('data-autopost-ref', `${frameIndex}:${i}`);
       const item = { ref: `${frameIndex}:${i}`, tag, role: el.getAttribute('role') || null, name };
       if (editable) item.editable = true;
+      // Collapsed/expanded state lets the nav-drill reveal nested items.
+      const ae = el.getAttribute('aria-expanded');
+      if (ae === 'true' || ae === 'false') item.expanded = ae === 'true';
+      else if (tag === 'summary') item.expanded = !!(el.parentElement && el.parentElement.open);
       if (el.tagName === 'SELECT') item.options = [...el.options].map((o) => o.value).slice(0, 12);
       items.push(item);
       if (++i >= 55) break;
@@ -471,6 +475,146 @@ function refLocator(page, ref) {
   return frame.locator(`[data-autopost-ref="${ref}"]`).first();
 }
 
+// ---------------------------------------------------------------- deterministic navigation
+
+// Text match used to find a nav item / search result for a target component
+// name. Splits camelCase boundaries then normalizes to lowercase alphanumerics,
+// so "DraggableList", "Draggable List" and "draggable-list" all compare equal.
+const normText = (s) => String(s || '')
+  .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, ' ')
+  .trim();
+
+// A change's nav_target may name a few components ("Input and Select"); split
+// into individual destinations to try in order.
+export function splitTargets(navTarget) {
+  return String(navTarget || '')
+    .split(/,|\/|&|\+|\band\b/i)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 4);
+}
+
+export function scoreNameMatch(name, target) {
+  const a = normText(name), b = normText(target);
+  if (!a || !b) return 0;
+  if (a === b) return 4;
+  if (a.startsWith(b) || b.startsWith(a)) return 3;
+  if (a.includes(b) || b.includes(a)) return 2;
+  const at = new Set(a.split(' '));
+  return b.split(' ').some((w) => at.has(w)) ? 1 : 0;
+}
+
+// Best clickable nav item / search result for a target, from a snapshot. Skips
+// the search box itself and unsafe controls; slightly prefers leaves over group
+// headers so "Input" doesn't stop at an "Inputs" group. Requires a real match
+// (>= includes), not just a weak shared word.
+export function bestNavMatch(items, target) {
+  let best = null, bestScore = 1.5;
+  for (const it of items) {
+    if (it.editable || UNSAFE_ACTION_NAME.test(it.name)) continue;
+    let s = scoreNameMatch(it.name, target);
+    if (s && it.expanded !== undefined) s -= 0.5; // prefer a leaf over a group header
+    if (s > bestScore) { bestScore = s; best = it; }
+  }
+  return best;
+}
+
+// Did we actually land on the target? Generic signals, checked across frames:
+// a nav item marked selected/current whose text matches, or a prominent heading
+// near the top, or the URL. Works for any catalog that highlights the active
+// item (Storybook, the e4 explorebook, most SPAs) without app-specific config.
+async function arrivedAtTarget(page, target) {
+  for (const frame of page.frames()) {
+    try {
+      const ok = await frame.evaluate((t) => {
+        const norm = (s) => String(s || '').replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        const b = norm(t);
+        if (!b) return false;
+        const SEL = '[aria-current],[aria-selected="true"],[data-selected="true"],.active,.selected,.is-active,.is-selected';
+        for (const el of document.querySelectorAll(SEL)) {
+          const txt = norm(el.textContent);
+          if (!txt) continue;
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0 && (txt === b || txt.includes(b))) return true;
+        }
+        for (const el of document.querySelectorAll('h1,h2,h3,[role=heading]')) {
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.top >= 0 && r.top < 440 && norm(el.textContent).includes(b)) return true;
+        }
+        return false;
+      }, target);
+      if (ok) return true;
+    } catch { /* cross-origin/detached frame */ }
+  }
+  try { if (normText(page.url()).includes(normText(target))) return true; } catch { /* bad url */ }
+  return false;
+}
+
+// Deterministically drive the app to the component/screen named by nav_target,
+// BEFORE any vision loop — so reaching the right place doesn't depend on the
+// model's discretion. Project-agnostic: (1) type the target into a search/
+// filter box and click the best result; (2) failing that, click the matching
+// nav item, expanding collapsed groups until it appears. Verified via a generic
+// arrival check. Best-effort and bounded: returns {ok:false} to let the caller
+// fall back to the vision loop rather than throwing. Safety-gated (never types
+// into passwords, never clicks destructive/financial/send controls).
+export async function navigateToTarget(page, navTarget, { maxMs = 25_000 } = {}) {
+  if (!navTarget) return { ok: false, reason: 'no target' };
+  const deadline = Date.now() + maxMs;
+  const targets = splitTargets(navTarget);
+  const settle = async () => {
+    await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+    await sleep(350);
+  };
+
+  // Strategy 1: search-jump.
+  for (const t of targets) {
+    if (Date.now() > deadline) break;
+    const snap = await snapshotInteractives(page);
+    const search = snap.find((it) => it.editable && /search|find|filter|jump|command|go to/i.test(it.name))
+      || snap.find((it) => it.editable);
+    if (!search) break; // no search box anywhere; go straight to nav-drill
+    const sloc = refLocator(page, search.ref);
+    if (!sloc) continue;
+    try {
+      await sloc.fill(t, { timeout: 5000 });
+      await sleep(500); // let results filter
+      const hit = bestNavMatch(await snapshotInteractives(page), t);
+      if (hit) {
+        await refLocator(page, hit.ref).click({ timeout: 6000 });
+        await settle();
+        if (await arrivedAtTarget(page, t)) return { ok: true, via: 'search', target: t };
+      }
+      await sloc.fill('', { timeout: 3000 }).catch(() => {}); // reset for the next target
+      await sleep(200);
+    } catch { /* try nav-drill / next target */ }
+  }
+
+  // Strategy 2: nav-drill — click the item, expanding collapsed groups to reveal it.
+  for (const t of targets) {
+    for (let attempt = 0; attempt < 5 && Date.now() < deadline; attempt++) {
+      const snap = await snapshotInteractives(page);
+      const hit = bestNavMatch(snap, t);
+      if (hit) {
+        try {
+          await refLocator(page, hit.ref).click({ timeout: 6000 });
+          await settle();
+          if (await arrivedAtTarget(page, t)) return { ok: true, via: 'nav', target: t };
+        } catch { /* fall through to expanding */ }
+        break;
+      }
+      const collapsed = snap.filter((it) => it.expanded === false && !UNSAFE_ACTION_NAME.test(it.name));
+      if (!collapsed.length) break;
+      for (const g of collapsed.slice(0, 6)) {
+        try { await refLocator(page, g.ref).click({ timeout: 4000 }); await sleep(200); } catch { /* ignore */ }
+      }
+    }
+  }
+  return { ok: false };
+}
+
 // Bounded, vision-driven interaction loop. Starting from a landing URL, lets
 // the model click/hover/select its way toward the most compelling state
 // (branded theme, composed screen, an opened menu…), capturing a frame after
@@ -495,6 +639,18 @@ async function browseForBestFrame(ctx, startUrl, { postText, commitMessage, inte
       frames.push({ file, label });
     };
     await capture('initial landing');
+
+    // Deterministically get to the target component first (search/nav-drill) so
+    // the vision loop only has to refine the state/framing, not find the place.
+    if (navTarget) {
+      const nav = await navigateToTarget(page, navTarget);
+      if (nav.ok) {
+        console.log(`Browse: navigated to "${nav.target}" via ${nav.via}.`);
+        await capture(`navigated to ${nav.target}`);
+      } else {
+        console.log(`Browse: could not deterministically navigate to "${navTarget}"; letting the vision loop try.`);
+      }
+    }
 
     const hintLine = interactionHints ? `\nOWNER HINTS (prefer these): ${interactionHints}` : '';
     const targetLine = navTarget ? `\nTARGET COMPONENT/SCREEN (navigate here — this is where the change lives): ${navTarget}` : '';
@@ -897,6 +1053,14 @@ async function recordInteractionVideo(browser, baseUrl, change, shared, tag) {
       await page.goto(startUrl, { waitUntil: 'load', timeout: 30_000 });
     });
     video = page.video();
+
+    // Get to the target component deterministically before the showcase loop
+    // (recorded, but trimmed away — the clip keeps only the showcase interaction).
+    if (navTarget) {
+      const nav = await navigateToTarget(page, navTarget);
+      if (nav.ok) console.log(`Recorder: navigated to "${nav.target}" via ${nav.via}.`);
+      else console.log(`Recorder: could not deterministically navigate to "${navTarget}"; letting the vision loop try.`);
+    }
 
     const deadline = Date.now() + 90_000;
     for (let step = 0; step < 6 && Date.now() < deadline; step++) {

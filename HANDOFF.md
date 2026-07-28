@@ -36,11 +36,14 @@ chain) → per change, EITHER:
   • image (cover.png [always singular] | local preview build | deployed site,
     deploy-gated) → vision picks best screenshot → element close-up when the
     changed component can be located (padded crop, nav-guarded so the hint
-    matches the canvas instance not the sidebar) → optional interactive browse
-    (bounded vision loop drives the page via clicks/hovers/selects/TYPE to reach
-    the state that shows the change; steered at a per-change nav_target and told
-    to use the catalog search box to jump to a named component and NOT settle for
-    a landing/overview page; safety-gated against mutating/financial/account/send
+    matches the canvas instance not the sidebar) → optional interactive browse:
+    FIRST a DETERMINISTIC `navigateToTarget()` (project-agnostic, no vision) drives
+    to the per-change nav_target — search-jump (type the name into a search/filter
+    box, click the best-matching result) then nav-drill (click the matching nav
+    item, expanding collapsed groups until it appears), confirmed by a generic
+    arrival check (selected/aria-current item or a matching heading); THEN the
+    bounded vision loop refines the state/framing via clicks/hovers/selects/TYPE
+    (told NOT to settle for a landing/overview page); safety-gated against mutating/financial/account/send
     actions; smaller step/time budget per change when bundling more than one) →
     vision picks best of {full page, close-up, interactive frames} → vision
     verification scoped to that change's own files, with one widened route search
