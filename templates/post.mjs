@@ -90,7 +90,7 @@ Voice rules (follow strictly):
 - Plain language. Never the changelog pattern "X now does Y to reflect Z".
 - No hype words: never "amazing", "exciting", "game-changer", "thrilled", "stoked", "huge", "massive".
 - No exclamation marks.
-- At most one fitting emoji total across the whole post (optional, skip if unsure).
+- No emojis anywhere in the post.
 - No hashtags unless they genuinely add reach.
 ${limitLine}
 - If the change is purely internal/no user impact, say so plainly — don't pretend it's a feature.
@@ -289,50 +289,85 @@ Return ONLY JSON: { "best_index": number, "reason": string }`,
 // container big enough to read as a crop, and shoots that element. Returns
 // null when the element can't be found or the container is basically the
 // whole page — the caller falls back to the full-page shot.
-async function shootElementCloseUp(ctx, url, hint, tag) {
+export async function shootElementCloseUp(ctx, url, hint, tag) {
   if (!hint || (!hint.text && !hint.selector)) return null;
   const page = await ctx.newPage();
   try {
     await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 }).catch(async () => {
       await page.goto(url, { waitUntil: 'load', timeout: 30_000 });
     });
+    // Prefer a match in the main content area, not the app chrome — the hint
+    // text ("Badge") often also appears in the sidebar nav, and grabbing that
+    // would crop the wrong thing. Skips anything inside nav/aside/header/sidebar.
+    const inChrome = (el) => !!el.closest('nav,aside,header,[role=navigation],[class*="sidebar" i],[class*="Sidebar" i]');
+    const firstContentMatch = async (loc) => {
+      const n = Math.min(await loc.count(), 20);
+      let fallback = null;
+      for (let i = 0; i < n; i++) {
+        const cand = loc.nth(i);
+        if (!(await cand.isVisible().catch(() => false))) continue;
+        if (fallback === null) fallback = cand;
+        const chrome = await cand.evaluate(inChrome).catch(() => false);
+        if (!chrome) return cand;
+      }
+      return fallback;
+    };
+
     let target = null;
     if (hint.selector) {
-      try {
-        const loc = page.locator(hint.selector).first();
-        if (await loc.count() && await loc.isVisible().catch(() => false)) target = loc;
-      } catch { /* model-supplied selector may be invalid syntax */ }
+      try { target = await firstContentMatch(page.locator(hint.selector)); }
+      catch { /* model-supplied selector may be invalid syntax */ }
     }
     if (!target && hint.text) {
-      const loc = page.getByText(hint.text, { exact: false }).first();
-      if (await loc.count() && await loc.isVisible().catch(() => false)) target = loc;
+      target = await firstContentMatch(page.getByText(hint.text, { exact: false }));
     }
     if (!target) {
       console.warn(`Close-up: element not found for hint ${JSON.stringify(hint)}.`);
       return null;
     }
 
-    // The hint often matches a small label; climb to a crop-worthy container.
+    // The hint often matches a small label; climb to a crop-worthy container,
+    // but stop at a wide readable band (e.g. a row of variants) — a low height
+    // is fine — and refuse to climb into a parent that balloons in BOTH
+    // dimensions, which means we'd be leaping into the empty story canvas
+    // around the content (the exact bug that shot a tiny badge on a blank page).
     const handle = await target.evaluateHandle((el) => {
       let n = el;
       while (n.parentElement) {
         const r = n.getBoundingClientRect();
-        if (r.width >= 280 && r.height >= 64) break;
+        if (r.width >= 280 && r.height >= 24) break;
+        const pr = n.parentElement.getBoundingClientRect();
+        const balloons = pr.height > r.height * 3 && pr.width > r.width * 1.5;
+        if (r.width >= 120 && r.height >= 20 && balloons) break;
         n = n.parentElement;
       }
       return n;
     });
-    const rect = await handle.evaluate((el) => {
-      const r = el.getBoundingClientRect();
-      return { w: r.width, h: r.height, vw: window.innerWidth, vh: window.innerHeight };
-    });
-    if (rect.w * rect.h > rect.vw * rect.vh * 0.85) {
+    // boundingBox() is top-frame viewport coords (frame-safe for Storybook's
+    // preview iframe), which is what page.screenshot({clip}) expects.
+    const box = await handle.asElement().boundingBox();
+    const vp = page.viewportSize() || { width: 1280, height: 800 };
+    if (!box || box.width < 40 || box.height < 24) {
+      console.warn('Close-up: container too small or unmeasurable; using the full-page shot instead.');
+      return null;
+    }
+    if (box.width * box.height > vp.width * vp.height * 0.85) {
       console.warn('Close-up: container covers almost the whole page; using the full-page shot instead.');
       return null;
     }
+    // Pad the crop so the component has breathing room rather than sitting
+    // edge-to-edge; clamp to the viewport.
+    const PAD = 28;
+    const x = Math.max(0, box.x - PAD);
+    const y = Math.max(0, box.y - PAD);
+    const clip = {
+      x, y,
+      width: Math.min(vp.width - x, box.width + PAD * 2),
+      height: Math.min(vp.height - y, box.height + PAD * 2),
+    };
     const file = join(tmpdir(), `auto-post-closeup-${tag}.png`);
-    await handle.asElement().screenshot({ path: file });
-    console.log(`Close-up captured (${Math.round(rect.w)}x${Math.round(rect.h)}) on ${url}.`);
+    await page.screenshot({ path: file, clip });
+    console.log(`Close-up captured (${Math.round(clip.width)}x${Math.round(clip.height)}, padded) on ${url}.`);
     return file;
   } catch (err) {
     console.warn(`Close-up failed: ${err.message} — falling back to the full-page shot.`);
@@ -462,6 +497,8 @@ async function browseForBestFrame(ctx, startUrl, { postText, commitMessage, inte
         decision = await gemini([
           {
             text: `You are driving a real web page to capture the most compelling screenshot for this social post. You may click/hover/select navigational and display controls to reach a better state (e.g. open the right screen, switch to a branded/non-wireframe theme, open a menu). Do NOT try to submit forms, buy, delete, or send anything.
+
+Aim for a shot where the changed component fills the frame and shows the FULL set of its variants/states together — if the sidebar/nav offers a "Tones", "Variants", "States", "All", or gallery view of this component, open it in preference to a single-instance "Playground"/demo. Avoid states where the component is one small element marooned on a large empty canvas.
 
 POST DRAFT: ${postText}
 COMMIT MESSAGE: ${commitMessage}${hintLine}
@@ -1215,10 +1252,17 @@ Return ONLY a JSON object matching this exact schema (no prose):
 ${wantRoutes ? `      "candidate_paths": string[],  // 1 to 3 URL paths most likely to visually showcase THIS change,
                                      // ordered best-guess first. Use "/" if unsure.
                                      // Examples: ["/", "/pricing", "/props/today"]
-      "element_hint": {              // the single UI element THIS change is visible in (for a zoomed-in shot)
-        "text": string | null,       // short distinguishing text rendered inside it, exactly as a user sees it
+                                     // PREFER a route/view that shows the FULL set of the changed
+                                     // component's variants/states/tones together (e.g. a "Tones",
+                                     // "Variants", "States", "All", or gallery story) over a single-instance
+                                     // "Playground"/demo — it shows the change across every option AND fills
+                                     // the frame instead of one small element on an empty canvas.
+      "element_hint": {              // the element to zoom the shot into — the GROUP that contains ALL the
+                                     // changed component's instances/variants (so the crop captures the whole
+                                     // set), not one instance. Null when no single region wraps the change.
+        "text": string | null,       // short distinguishing text rendered inside that region, as a user sees it
         "selector": string | null    // a CSS selector for it if the diff makes one obvious, else null
-      } | null,                      // null when no single element visibly changed
+      } | null,                      // null when no single region visibly wraps the change
       "capture": "image" | "video",  // "video" ONLY when THIS change is fundamentally an interaction or motion a
                                      // still can't convey: drag/drop, reorder/sortable, expand/collapse, tab switch,
                                      // hover reveal, animation, transition. Static changes (copy, color, layout, a
