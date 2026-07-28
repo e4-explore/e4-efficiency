@@ -21,12 +21,15 @@ When a commit lands on `main`:
    recent commit history for the "why", plus candidate paths per change on
    your deployed site most likely to show it.
 3. Playwright + Chromium screenshots those paths per change. It can also
-   *drive* the page — clicking/hovering/selecting navigational and display
-   controls to reach a more compelling state (open the right screen, switch to
-   a branded theme, open a menu), capturing a frame after each step — then
-   picks the best of the full page, an element close-up, and the interactive
-   frames. (Interaction never triggers mutating/financial/account/send
-   actions; on by default, steerable per repo with `interaction-hints`.)
+   *drive* the page — clicking/hovering/selecting/typing on navigational and
+   display controls to reach the state that shows the change: it will type a
+   component's name into a catalog search box to jump straight to it, focus a
+   field or open a dropdown to reveal a focus/open-state change, and prefers a
+   frame-filling all-variants view over a lone element on an empty canvas —
+   capturing a frame after each step, then picking the best of the full page, an
+   element close-up, and the interactive frames. (Never triggers
+   mutating/financial/account/send actions; on by default, steerable per repo
+   with `interaction-hints`.)
    A change the model flags as an interaction/motion is instead *recorded*: it
    drives the real interaction (drag a row to reorder, expand a panel, switch a
    tab) with a synthetic cursor and saves a short mp4 (needs ffmpeg — present on
@@ -34,8 +37,9 @@ When a commit lands on `main`:
    disable with `interaction-videos: false`.
 4. A vision pass verifies each image actually shows its change; if it doesn't,
    the model maps that change's files to the repo's route files to find where
-   it renders and retries there. A change whose shots all fail is dropped
-   (its line still posts, just without an image) rather than failing the run.
+   it renders and retries there. If nothing can be confirmed to show the change,
+   that line posts **text-only** rather than attaching a wrong image (e.g. a
+   generic landing page).
 5. Up to 4 images (X's own per-post limit) — or a single video (X allows either,
    never both) — are uploaded to X and the post is published with them attached.
 

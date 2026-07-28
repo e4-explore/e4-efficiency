@@ -35,12 +35,17 @@ changed-element hint, and a `capture` flag (`image` | `video`) (model-fallback
 chain) → per change, EITHER:
   • image (cover.png [always singular] | local preview build | deployed site,
     deploy-gated) → vision picks best screenshot → element close-up when the
-    changed component can be located → optional interactive browse (bounded
-    vision loop drives the page via clicks/hovers/selects to reach a compelling
-    state, safety-gated against mutating/financial/account/send actions; smaller
-    step/time budget per change when bundling more than one) → vision picks best
-    of {full page, close-up, interactive frames} → vision verification scoped to
-    that change's own files, with one widened route search on a miss; OR
+    changed component can be located (padded crop, nav-guarded so the hint
+    matches the canvas instance not the sidebar) → optional interactive browse
+    (bounded vision loop drives the page via clicks/hovers/selects/TYPE to reach
+    the state that shows the change; steered at a per-change nav_target and told
+    to use the catalog search box to jump to a named component and NOT settle for
+    a landing/overview page; safety-gated against mutating/financial/account/send
+    actions; smaller step/time budget per change when bundling more than one) →
+    vision picks best of {full page, close-up, interactive frames} → vision
+    verification scoped to that change's own files, with one widened route search
+    on a miss, and — if still unconfirmed — the change goes TEXT-ONLY rather than
+    posting a confirmed-wrong image (e.g. a generic landing page); OR
   • video (change flagged `capture:"video"` — an interaction/motion a still
     can't convey): a dedicated recording context + bounded vision loop navigates
     to the screen and drives the ONE showcase interaction (drag/reorder, expand,

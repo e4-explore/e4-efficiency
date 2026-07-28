@@ -416,9 +416,13 @@ const UNSAFE_ACTION_NAME = /\b(delete|remove|discard|destroy|erase|deactivate|pa
 // Re-run every step because acting on the page changes the DOM. Storybook is
 // the motivating case: the sidebar nav and theme toolbar live in the top
 // frame, story internals in a child iframe — both are covered.
-async function snapshotInteractives(page) {
+export async function snapshotInteractives(page) {
   const tagger = (frameIndex) => {
-    const SEL = 'a,button,select,summary,[role=button],[role=tab],[role=menuitem],[role=menuitemradio],[role=switch],[role=link],[role=option],[aria-haspopup]';
+    // Includes text inputs / the catalog search box (marked editable) so the
+    // loop can type a component name into search to jump straight to it, or
+    // focus/fill the changed field to reveal a focus-state change.
+    const SEL = 'a,button,select,summary,input:not([type=hidden]),textarea,[contenteditable=""],[contenteditable=true],[role=button],[role=tab],[role=menuitem],[role=menuitemradio],[role=switch],[role=link],[role=option],[role=searchbox],[role=textbox],[aria-haspopup]';
+    const EDITABLE_TYPES = new Set(['text', 'search', 'email', 'url', 'tel', 'number', '']);
     const items = [];
     let i = 0;
     for (const el of document.querySelectorAll(SEL)) {
@@ -428,14 +432,22 @@ async function snapshotInteractives(page) {
         && r.right > 0 && r.left < innerWidth
         && st.visibility !== 'hidden' && st.display !== 'none' && st.pointerEvents !== 'none';
       if (!visible) continue;
-      const name = (el.getAttribute('aria-label') || el.innerText || el.value || el.getAttribute('title') || '')
+      const tag = el.tagName.toLowerCase();
+      const type = (el.getAttribute('type') || '').toLowerCase();
+      const editable = (tag === 'textarea')
+        || el.isContentEditable
+        || el.getAttribute('role') === 'searchbox' || el.getAttribute('role') === 'textbox'
+        || (tag === 'input' && EDITABLE_TYPES.has(type));
+      if (tag === 'input' && type === 'password') continue; // never type into passwords
+      const name = (el.getAttribute('aria-label') || el.innerText || el.getAttribute('placeholder') || el.value || el.getAttribute('title') || '')
         .trim().replace(/\s+/g, ' ').slice(0, 80);
       if (!name) continue;
       el.setAttribute('data-autopost-ref', `${frameIndex}:${i}`);
-      const item = { ref: `${frameIndex}:${i}`, tag: el.tagName.toLowerCase(), role: el.getAttribute('role') || null, name };
+      const item = { ref: `${frameIndex}:${i}`, tag, role: el.getAttribute('role') || null, name };
+      if (editable) item.editable = true;
       if (el.tagName === 'SELECT') item.options = [...el.options].map((o) => o.value).slice(0, 12);
       items.push(item);
-      if (++i >= 50) break;
+      if (++i >= 55) break;
     }
     return items;
   };
@@ -465,7 +477,7 @@ function refLocator(page, ref) {
 // every step. Returns the single best frame it saw, or null to fall back to
 // the plain route/close-up shots. Every failure degrades gracefully; the loop
 // is hard-bounded on steps and wall-clock so it can't hang the CI job.
-async function browseForBestFrame(ctx, startUrl, { postText, commitMessage, interactionHints, maxSteps = 5, wallClockMs = 90_000 }, tag = 'x') {
+async function browseForBestFrame(ctx, startUrl, { postText, commitMessage, interactionHints, navTarget, stateHint, maxSteps = 5, wallClockMs = 90_000 }, tag = 'x') {
   const page = await ctx.newPage();
   const frames = [];
   const history = [];
@@ -485,10 +497,12 @@ async function browseForBestFrame(ctx, startUrl, { postText, commitMessage, inte
     await capture('initial landing');
 
     const hintLine = interactionHints ? `\nOWNER HINTS (prefer these): ${interactionHints}` : '';
+    const targetLine = navTarget ? `\nTARGET COMPONENT/SCREEN (navigate here — this is where the change lives): ${navTarget}` : '';
+    const stateLine = stateHint ? `\nSTATE TO REACH (the change is only visible in this state): ${stateHint}` : '';
 
     for (let step = 0; step < maxSteps && Date.now() < deadline; step++) {
       const all = await snapshotInteractives(page);
-      const offered = all.filter((it) => !UNSAFE_ACTION_NAME.test(it.name)).slice(0, 40);
+      const offered = all.filter((it) => !UNSAFE_ACTION_NAME.test(it.name)).slice(0, 42);
       if (!offered.length) break;
 
       const shot = frames[frames.length - 1];
@@ -496,25 +510,28 @@ async function browseForBestFrame(ctx, startUrl, { postText, commitMessage, inte
       try {
         decision = await gemini([
           {
-            text: `You are driving a real web page to capture the most compelling screenshot for this social post. You may click/hover/select navigational and display controls to reach a better state (e.g. open the right screen, switch to a branded/non-wireframe theme, open a menu). Do NOT try to submit forms, buy, delete, or send anything.
+            text: `You are driving a real web page to capture the most compelling screenshot for this social post. Click/hover/select/type on navigational and display controls to reach the state that shows the change. Do NOT submit forms, buy, delete, or send anything.
 
-Aim for a shot where the changed component fills the frame and shows the FULL set of its variants/states together — if the sidebar/nav offers a "Tones", "Variants", "States", "All", or gallery view of this component, open it in preference to a single-instance "Playground"/demo. Avoid states where the component is one small element marooned on a large empty canvas.
+YOUR GOAL: get to the SPECIFIC component/screen the change is about and show it in the exact state described — do not settle for a generic landing / welcome / "Start" / overview page, which never shows a specific component's change.${targetLine}${stateLine}
+- To navigate a component catalog fast: if there's a search/filter box (often "Find components", "Search", ⌘K), TYPE the target component's name into it, then click the matching result — this is more reliable than hunting through nested nav. You may also expand a collapsed nav group (e.g. "Components") and click the item.
+- Prefer a shot where the component fills the frame and shows the FULL set of its variants/states together (a "Tones"/"Variants"/"States"/"All"/gallery view) over a single-instance "Playground"/demo, and over one small element on an empty canvas.
+- If the change is a focus/open/hover/expanded state (e.g. an accent border on a focused input, an open dropdown), reach it: type into or click the field to focus it, click a select to open it, hover to reveal.
 
 POST DRAFT: ${postText}
 COMMIT MESSAGE: ${commitMessage}${hintLine}
 
 ACTIONS SO FAR: ${history.length ? history.join(' | ') : '(none yet)'}
 
-The attached screenshot is the CURRENT state. Interactive elements you may act on (pick by "ref"):
-${offered.map((it) => `- ${it.ref} [${it.role || it.tag}] "${it.name}"${it.options ? ` options=${JSON.stringify(it.options)}` : ''}`).join('\n')}
+The attached screenshot is the CURRENT state. Interactive elements you may act on (pick by "ref"; "editable":true = a field you can type into):
+${offered.map((it) => `- ${it.ref} [${it.role || it.tag}]${it.editable ? ' editable' : ''} "${it.name}"${it.options ? ` options=${JSON.stringify(it.options)}` : ''}`).join('\n')}
 
-If the current state already showcases the change well, stop. Otherwise pick ONE action that most improves the shot.
+If the current state already clearly showcases the change, stop. Otherwise pick ONE action that most advances toward it.
 Return ONLY JSON:
 {
-  "done": boolean,        // true = current state is good enough; stop
-  "action": "click" | "hover" | "select" | null,
+  "done": boolean,        // true = current state clearly shows the change; stop
+  "action": "click" | "hover" | "select" | "type" | null,
   "ref": string | null,   // one of the refs above
-  "value": string | null, // for select: the option value
+  "value": string | null, // "select": option value. "type": the text to enter (e.g. the target component name)
   "reason": string
 }`,
           },
@@ -539,13 +556,16 @@ Return ONLY JSON:
           await loc.selectOption(decision.value ?? '', { timeout: 8000 });
         } else if (decision.action === 'hover') {
           await loc.hover({ timeout: 8000 });
+        } else if (decision.action === 'type') {
+          // Fill focuses + replaces (no submit). Cap length; never press Enter.
+          await loc.fill(String(decision.value ?? '').slice(0, 60), { timeout: 8000 });
         } else {
           await loc.click({ timeout: 8000 });
         }
-        history.push(`${decision.action} "${picked.name}"`);
+        history.push(`${decision.action} "${picked.name}"${decision.action === 'type' ? ` = "${decision.value ?? ''}"` : ''}`);
         console.log(`Browse step ${step}: ${decision.action} "${picked.name}" — ${decision.reason ?? ''}`);
         await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
-        await sleep(500); // let menus/animations settle
+        await sleep(500); // let menus/animations/filter results settle
         await capture(`after ${decision.action} "${picked.name}"`);
       } catch (err) {
         console.warn(`Browse action failed (${err.message}); stopping loop.`);
@@ -605,6 +625,8 @@ async function resolveChangeImage(ctx, baseUrl, repoRoot, change, shared, tag) {
     .slice(0, 3)
     .map((p) => (typeof p === 'string' && p.trim() ? p.trim() : '/'));
   const elementHint = (change.element_hint && typeof change.element_hint === 'object') ? change.element_hint : null;
+  const navTarget = typeof change.nav_target === 'string' && change.nav_target.trim() ? change.nav_target.trim() : null;
+  const stateHint = typeof change.interaction_hint === 'string' && change.interaction_hint.trim() ? change.interaction_hint.trim() : null;
 
   const shots = await shootRoutes(ctx, baseUrl, candidates, `${tag}-r1`);
   if (!shots.length) {
@@ -620,7 +642,7 @@ async function resolveChangeImage(ctx, baseUrl, repoRoot, change, shared, tag) {
   if (interactiveShots) {
     const framed = await browseForBestFrame(
       ctx, chosen.url,
-      { postText: clause, commitMessage, interactionHints, maxSteps: browseMaxSteps, wallClockMs: browseWallClockMs },
+      { postText: clause, commitMessage, interactionHints, navTarget, stateHint, maxSteps: browseMaxSteps, wallClockMs: browseWallClockMs },
       `${tag}-r1`,
     );
     if (framed) pool.push(framed);
@@ -690,9 +712,17 @@ Return ONLY JSON:
       }
     }
     if (!recovered) {
-      console.warn(`Change "${clause}": not visibly confirmed on any route; using the best full-page shot.`);
-      imagePath = fallback.file;
-      imageNote = fallback.note;
+      // Last resort: the plain full-page shot of the best route. Only keep it if
+      // it actually shows the change — posting a confirmed-wrong image (e.g. a
+      // generic landing page) is worse than posting the line with no image, so
+      // drop it and let this change go text-only in that case.
+      if (await shotShowsChange(fallback.file, clause, commitMessage)) {
+        imagePath = fallback.file;
+        imageNote = fallback.note;
+      } else {
+        console.warn(`Change "${clause}": no shot could be confirmed to show the change; posting this line text-only.`);
+        return null;
+      }
     }
   }
   return { file: imagePath, note: imageNote };
@@ -762,8 +792,9 @@ export async function apDrag(page, from, to, { steps = 26, holdMs = 150 } = {}) 
 // skips. Tagged with the same data-autopost-ref attribute refLocator resolves.
 export async function snapshotForRecorder(page) {
   const tagger = (frameIndex) => {
-    const INTERACT = 'a,button,select,summary,[role=button],[role=tab],[role=menuitem],[role=menuitemradio],[role=switch],[role=link],[role=option],[aria-haspopup]';
+    const INTERACT = 'a,button,select,summary,input:not([type=hidden]),textarea,[contenteditable=""],[contenteditable=true],[role=button],[role=tab],[role=menuitem],[role=menuitemradio],[role=switch],[role=link],[role=option],[role=searchbox],[role=textbox],[aria-haspopup]';
     const DRAG = '[draggable=true],[aria-roledescription*="drag" i],[class*="drag" i],[class*="sortable" i],[class*="handle" i],[role=listitem],[role=row],li';
+    const EDITABLE_TYPES = new Set(['text', 'search', 'email', 'url', 'tel', 'number', '']);
     const items = [];
     let i = 0;
     const consider = (el, draggable) => {
@@ -774,11 +805,18 @@ export async function snapshotForRecorder(page) {
         && r.right > 0 && r.left < innerWidth
         && st.visibility !== 'hidden' && st.display !== 'none' && st.pointerEvents !== 'none';
       if (!visible) return;
-      const name = (el.getAttribute('aria-label') || el.innerText || el.value || el.getAttribute('title') || '')
+      const tag = el.tagName.toLowerCase();
+      const type = (el.getAttribute('type') || '').toLowerCase();
+      if (tag === 'input' && type === 'password') return; // never type into passwords
+      const editable = tag === 'textarea' || el.isContentEditable
+        || el.getAttribute('role') === 'searchbox' || el.getAttribute('role') === 'textbox'
+        || (tag === 'input' && EDITABLE_TYPES.has(type));
+      const name = (el.getAttribute('aria-label') || el.innerText || el.getAttribute('placeholder') || el.value || el.getAttribute('title') || '')
         .trim().replace(/\s+/g, ' ').slice(0, 80);
       if (!name) return;
       el.setAttribute('data-autopost-ref', `${frameIndex}:${i}`);
-      const item = { ref: `${frameIndex}:${i}`, tag: el.tagName.toLowerCase(), role: el.getAttribute('role') || null, name, draggable: !!draggable };
+      const item = { ref: `${frameIndex}:${i}`, tag, role: el.getAttribute('role') || null, name, draggable: !!draggable };
+      if (editable) item.editable = true;
       if (el.tagName === 'SELECT') item.options = [...el.options].map((o) => o.value).slice(0, 12);
       items.push(item);
       i++;
@@ -851,6 +889,8 @@ async function recordInteractionVideo(browser, baseUrl, change, shared, tag) {
   const elapsed = () => (Date.now() - t0) / 1000;
   const history = [];
   const hintLine = interactionHints ? `\nOWNER HINTS: ${interactionHints}` : '';
+  const navTarget = typeof change.nav_target === 'string' && change.nav_target.trim() ? change.nav_target.trim() : '';
+  const targetLine = navTarget ? `\nTARGET COMPONENT/SCREEN (navigate here — the change lives here): ${navTarget}` : '';
 
   try {
     await page.goto(startUrl, { waitUntil: 'networkidle', timeout: 30_000 }).catch(async () => {
@@ -871,7 +911,9 @@ async function recordInteractionVideo(browser, baseUrl, change, shared, tag) {
       try {
         decision = await gemini([
           {
-            text: `You are driving a real web page to make a SHORT SCREEN RECORDING that shows off one UI interaction for a social post. First navigate (click/hover/select) to the screen where it happens, then perform the SINGLE interaction that best demonstrates the change — e.g. drag a list row to reorder it, expand/collapse a panel, switch a tab, hover to reveal actions. A synthetic cursor is drawn for you; just choose actions.
+            text: `You are driving a real web page to make a SHORT SCREEN RECORDING that shows off one UI interaction for a social post. First navigate to the screen where it happens, then perform the SINGLE interaction that best demonstrates the change — e.g. drag a list row to reorder it, expand/collapse a panel, switch a tab, hover to reveal actions. A synthetic cursor is drawn for you; just choose actions.
+
+Get to the SPECIFIC component/screen the change is about — do NOT settle for a generic landing / welcome / "Start" / overview page. To reach a component in a catalog fast: if there's a search/filter box (often "Find components", "Search", ⌘K), use action "type" to enter the target name, then click the matching result; or expand a collapsed nav group (e.g. "Components") and click the item.${targetLine}
 
 POST DRAFT: ${clause}
 INTERACTION TO SHOW: ${interactionHint || '(infer from the draft + commit)'}
@@ -879,18 +921,18 @@ COMMIT MESSAGE: ${commitMessage}${hintLine}
 
 ACTIONS SO FAR: ${history.length ? history.join(' | ') : '(none yet)'}
 
-The attached screenshot is the CURRENT state. Elements you may act on (pick by "ref"; "draggable":true marks list rows / drag handles you can drag):
-${offered.map((it) => `- ${it.ref} [${it.role || it.tag}]${it.draggable ? ' draggable' : ''} "${it.name}"${it.options ? ` options=${JSON.stringify(it.options)}` : ''}`).join('\n')}
+The attached screenshot is the CURRENT state. Elements you may act on (pick by "ref"; "draggable":true = a row/handle you can drag; "editable":true = a field you can type into):
+${offered.map((it) => `- ${it.ref} [${it.role || it.tag}]${it.draggable ? ' draggable' : ''}${it.editable ? ' editable' : ''} "${it.name}"${it.options ? ` options=${JSON.stringify(it.options)}` : ''}`).join('\n')}
 
-Rules: only navigational/display actions to get there; then ONE showcase interaction. Never submit forms, buy, delete, or send anything. Set "is_capture": true ONLY on the single showcase-interaction step, never on a navigation step. Once the showcase interaction is done, stop with "done": true.
+Rules: navigation actions (click/type/hover/select) to get there; then ONE showcase interaction. Never submit forms, buy, delete, or send anything. Set "is_capture": true ONLY on the single showcase-interaction step, never on a navigation step (typing into a search box is navigation, not the showcase). Once the showcase interaction is done, stop with "done": true.
 Return ONLY JSON:
 {
   "done": boolean,
-  "action": "drag" | "click" | "hover" | "select" | null,
+  "action": "drag" | "click" | "hover" | "select" | "type" | null,
   "ref": string | null,       // source element
   "to_ref": string | null,    // drag target element (drag only; the row to drop onto/past)
   "dy": number | null,        // fallback drag distance in px if no to_ref (positive = down)
-  "value": string | null,     // option value for select
+  "value": string | null,     // "select": option value. "type": the text to enter (e.g. target component name)
   "is_capture": boolean,      // true only on the showcase interaction
   "reason": string
 }`,
@@ -931,13 +973,18 @@ Return ONLY JSON:
         } else if (decision.action === 'select') {
           await src.selectOption(decision.value ?? '', { timeout: 8000 });
           await sleep(600);
+        } else if (decision.action === 'type') {
+          const b = boxCenter(await src.boundingBox());
+          if (b) { await apMove(page, b.x, b.y); await sleep(120); }
+          await src.fill(String(decision.value ?? '').slice(0, 60), { timeout: 8000 }); // focuses + fills, no submit
+          await sleep(600);
         } else {
           const b = boxCenter(await src.boundingBox());
           if (b) { await apMove(page, b.x, b.y); await sleep(150); }
           await src.click({ timeout: 8000 });
           await sleep(600);
         }
-        history.push(`${decision.action} "${picked.name}"`);
+        history.push(`${decision.action} "${picked.name}"${decision.action === 'type' ? ` = "${decision.value ?? ''}"` : ''}`);
         console.log(`Recorder step ${step}: ${decision.action} "${picked.name}"${isCapture ? ' [capture]' : ''} — ${decision.reason ?? ''}`);
         await page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
       } catch (err) {
@@ -1257,6 +1304,11 @@ ${wantRoutes ? `      "candidate_paths": string[],  // 1 to 3 URL paths most lik
                                      // "Variants", "States", "All", or gallery story) over a single-instance
                                      // "Playground"/demo — it shows the change across every option AND fills
                                      // the frame instead of one small element on an empty canvas.
+      "nav_target": string | null,   // the name of the specific component/screen to open to SEE this change
+                                     // (e.g. "Input", "Select", "Badge"). Many catalogs are navigated by
+                                     // clicking a sidebar/search, NOT by URL, so this names the destination for
+                                     // the screenshotter to reach (via the catalog's search box or nav). Null
+                                     // if the change is on the default/landing view itself.
       "element_hint": {              // the element to zoom the shot into — the GROUP that contains ALL the
                                      // changed component's instances/variants (so the crop captures the whole
                                      // set), not one instance. Null when no single region wraps the change.
@@ -1265,11 +1317,14 @@ ${wantRoutes ? `      "candidate_paths": string[],  // 1 to 3 URL paths most lik
       } | null,                      // null when no single region visibly wraps the change
       "capture": "image" | "video",  // "video" ONLY when THIS change is fundamentally an interaction or motion a
                                      // still can't convey: drag/drop, reorder/sortable, expand/collapse, tab switch,
-                                     // hover reveal, animation, transition. Static changes (copy, color, layout, a
-                                     // new element) are "image". When unsure, "image".
-      "interaction_hint": string | null  // when "video": one short phrase for the interaction to perform on screen,
-                                     // e.g. "drag a list row by its handle to reorder it", "hover a card to reveal
-                                     // the actions", "switch to the second tab". null when "image".
+                                     // animation, transition. A focus/open/hover state whose END STATE a still CAN
+                                     // show (an accent border on a focused field, an open dropdown) is "image" —
+                                     // set interaction_hint so the screenshotter reaches that state. When unsure, "image".
+      "interaction_hint": string | null  // the interactive STATE the change is only visible in, as one short phrase,
+                                     // for EITHER capture mode. e.g. "focus the input to show its accent border",
+                                     // "open the select dropdown", "drag a list row by its handle to reorder it",
+                                     // "hover a card to reveal the actions". Null when the change shows in the
+                                     // component's default resting state.
 ` : ''}    }
   ]
 }`,
