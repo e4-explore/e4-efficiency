@@ -475,6 +475,37 @@ function refLocator(page, ref) {
   return frame.locator(`[data-autopost-ref="${ref}"]`).first();
 }
 
+// Type text into a control the way the browse/nav loops intend: focus + replace,
+// never submit. Playwright's fill() throws ("Element is not an <input>,
+// <textarea> or [contenteditable]") when the ref points at a wrapper that isn't
+// itself fillable — the common case is a combobox/search field (e.g. downshift)
+// whose real <input> is nested inside it, which is precisely what stalled the
+// vision loop. Recover by filling that inner field, and if there is none, by
+// focusing the control and typing via the keyboard. Only rethrows genuine
+// failures on real fields (timeout, detached) so callers keep their try/catch.
+async function typeIntoField(page, loc, value) {
+  const text = String(value ?? '').slice(0, 60);
+  try {
+    await loc.fill(text, { timeout: 8000 });
+    return;
+  } catch (err) {
+    if (!/not an <input>/i.test(err.message)) throw err; // real field failed, not a wrapper
+  }
+  const inner = loc.locator('input:not([type=hidden]), textarea, [contenteditable=""], [contenteditable=true]').first();
+  try {
+    if (await inner.count()) {
+      await inner.fill(text, { timeout: 8000 });
+      return;
+    }
+  } catch { /* no fillable descendant — fall through to keyboard */ }
+  // Last resort: focus the control and type. Select-all first so we replace any
+  // existing value; never press Enter, so nothing is submitted.
+  await loc.click({ timeout: 8000 });
+  await page.keyboard.press('Control+A').catch(() => {});
+  if (text) await page.keyboard.type(text, { delay: 10 });
+  else await page.keyboard.press('Delete').catch(() => {});
+}
+
 // ---------------------------------------------------------------- deterministic navigation
 
 // Text match used to find a nav item / search result for a target component
@@ -579,7 +610,7 @@ export async function navigateToTarget(page, navTarget, { maxMs = 25_000 } = {})
     const sloc = refLocator(page, search.ref);
     if (!sloc) continue;
     try {
-      await sloc.fill(t, { timeout: 5000 });
+      await typeIntoField(page, sloc, t);
       await sleep(500); // let results filter
       const hit = bestNavMatch(await snapshotInteractives(page), t);
       if (hit) {
@@ -587,7 +618,7 @@ export async function navigateToTarget(page, navTarget, { maxMs = 25_000 } = {})
         await settle();
         if (await arrivedAtTarget(page, t)) return { ok: true, via: 'search', target: t };
       }
-      await sloc.fill('', { timeout: 3000 }).catch(() => {}); // reset for the next target
+      await typeIntoField(page, sloc, '').catch(() => {}); // reset for the next target
       await sleep(200);
     } catch { /* try nav-drill / next target */ }
   }
@@ -713,8 +744,9 @@ Return ONLY JSON:
         } else if (decision.action === 'hover') {
           await loc.hover({ timeout: 8000 });
         } else if (decision.action === 'type') {
-          // Fill focuses + replaces (no submit). Cap length; never press Enter.
-          await loc.fill(String(decision.value ?? '').slice(0, 60), { timeout: 8000 });
+          // Focus + replace (no submit); routes around combobox/search wrappers
+          // whose real <input> is nested. Caps length; never presses Enter.
+          await typeIntoField(page, loc, decision.value);
         } else {
           await loc.click({ timeout: 8000 });
         }
@@ -1140,7 +1172,7 @@ Return ONLY JSON:
         } else if (decision.action === 'type') {
           const b = boxCenter(await src.boundingBox());
           if (b) { await apMove(page, b.x, b.y); await sleep(120); }
-          await src.fill(String(decision.value ?? '').slice(0, 60), { timeout: 8000 }); // focuses + fills, no submit
+          await typeIntoField(page, src, decision.value); // focuses + fills, no submit; handles combobox wrappers
           await sleep(600);
         } else {
           const b = boxCenter(await src.boundingBox());
@@ -1578,7 +1610,14 @@ ${wantRoutes ? `      "candidate_paths": string[],  // 1 to 3 URL paths most lik
           }
           if (resolved) media.push(resolved);
         }
-        if (!media.length) throw new Error('Every candidate capture failed for every bundled change.');
+        if (!media.length) {
+          // No shot could be confirmed for any bundled change. Rather than drop
+          // the whole update, fall through to a text-only post — the same
+          // graceful degradation each individual change already does when its
+          // shot can't be verified (see resolveChangeImage). The draft text
+          // carries every clause regardless of media.
+          console.warn('No shot could be confirmed for any bundled change; posting text-only.');
+        }
       } finally {
         await browser.close();
       }
@@ -1701,7 +1740,11 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
         const mimeType = mediaTypes[k] === 'video' ? 'video/mp4' : 'image/png';
         mediaIds.push(await twitter.v1.uploadMedia(imagePaths[k], { mimeType }));
       }
-      const tweet = await twitter.v2.tweet({ text: finalText, media: { media_ids: mediaIds } });
+      // X rejects a `media` field with an empty media_ids array, so a text-only
+      // post (no shot confirmed for any change) must omit `media` entirely.
+      const tweet = mediaIds.length
+        ? await twitter.v2.tweet({ text: finalText, media: { media_ids: mediaIds } })
+        : await twitter.v2.tweet({ text: finalText });
       console.log('Posted tweet id:', tweet.data.id);
 
       // Record for future runs (the workflow commits this file back to the repo).
