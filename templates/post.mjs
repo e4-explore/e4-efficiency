@@ -69,14 +69,15 @@ const GEMINI_503_RETRY_DELAYS_MS = [2000, 5000];
 
 const RUBRIC = `
 Engagement rubric (what makes a post worth reading):
-- One statement, one idea per change: the change plus the reason it matters, joined naturally.
-- The "why" is product value ("MLS bets are in now"), never a restatement of the change ("to reflect broader coverage").
+- One idea per change: the change plus why it matters, in a single natural sentence.
+- The "why" is real product value ("MLS bets are in now"), never a restatement of the change ("to reflect broader coverage").
 - Concrete beats abstract: name the thing ("live odds now refresh every 30s"), never "improved performance".
-- State it as a fact about the product, not a narrated action: "'Create App' button — makes it faster to spin up a new project", not "We renamed the setup button to 'Create App' so it's easier to spin up a new project".
-- Vary structure against recent posts — if the last post opened with the feature name, don't do it again.
+- State it as a fact about the product, not a narrated action: "the 'Create App' button makes it faster to spin up a new project", not "We renamed the setup button to 'Create App' so it's easier to spin up a new project".
+- Sound like a person, not a changelog or a press release. Casual and direct beats stiff and formal.
+- Vary structure against recent posts: if the last post opened with the feature name, don't do it again.
 - When a push bundles several distinct changes: each gets its own line, ordered
   most user-facing first, no connective narration ("also", "plus", "additionally")
-  between them — every line stands alone, same statement rules as a single post.
+  between them. Every line stands alone, same rules as a single post.
 `.trim();
 
 function buildVoice(includeCommitLink) {
@@ -85,17 +86,22 @@ function buildVoice(includeCommitLink) {
     : '- Under 280 characters total.';
   return `
 Voice rules (follow strictly):
-- Exactly one statement per change: name the feature/change itself, then the reason it matters. e.g. "'Create App' button — makes it faster to spin up a new project" rather than "We renamed the setup button to 'Create App' so it's easier to spin up a new project".
-- Never use "we", "our", or "I" as the sentence's subject, and never open with "We <verb>ed" or "Renamed/Added/Fixed X so Y" — state the fact, don't narrate the act of changing it.
-- Plain language. Never the changelog pattern "X now does Y to reflect Z".
-- No hype words: never "amazing", "exciting", "game-changer", "thrilled", "stoked", "huge", "massive".
-- No exclamation marks.
-- No emojis anywhere in the post.
-- No hashtags unless they genuinely add reach.
+- One statement per change: name the change, then why it matters, in a single natural sentence. e.g. "the 'Create App' button makes it faster to spin up a new project" rather than "We renamed the setup button to 'Create App' so it's easier to spin up a new project".
+- Write like a person talking, not a marketer or a changelog. Casual, plain, direct. Contractions are good (it's, you're, doesn't).
+- Never use "we", "our", or "I" as the subject, and never open with "We <verb>ed" or "Renamed/Added/Fixed X so Y". State the fact, don't narrate the act of changing it.
+- Never the changelog pattern "X now does Y to reflect Z".
+
+Do NOT write like AI. Specifically:
+- No em dashes or en dashes (the "—" or "–" characters) anywhere. Use a comma, a period, or reword the sentence. This is the single most important rule.
+- Drop the "feature — benefit" / "does X, keeping things Y" appendage formula. Just say the thing.
+- No rule-of-three padding ("clean, fast, and easy to scan"): keep the one that actually matters.
+- Never these tell-words or phrases: seamless(ly), robust, elevate, leverage, streamline, effortless, empower, unlock, delve, boasts, "designed to", "ensures that", "when it comes to", "not only ... but also", "it's worth noting", "in today's", "game changer", "the power of".
+- No hype words: "amazing", "exciting", "thrilled", "stoked", "huge", "massive".
+- No exclamation marks. No emojis anywhere. No hashtags unless they genuinely add reach.
 ${limitLine}
-- If the change is purely internal/no user impact, say so plainly — don't pretend it's a feature.
+- If the change is purely internal with no user impact, say so plainly; don't dress it up as a feature.
 - If the push bundles multiple distinct changes, put each on its own line (a
-  short list, no bullets/numbering) instead of one run-on sentence — see the
+  short list, no bullets/numbering) instead of one run-on sentence. See the
   rubric for ordering and connective-word rules.
 `.trim();
 }
@@ -139,6 +145,22 @@ export function pickPostMedia(media) {
   const firstVideo = list.find((m) => m.type === 'video');
   if (firstVideo) return { items: [firstVideo], droppedForVideo: list.length - 1 };
   return { items: list.slice(0, 4), droppedForVideo: 0 };
+}
+
+// Belt-and-suspenders removal of the mechanical "AI wrote this" tells the model
+// still slips in despite the voice rules. The em/en dash is the loudest signal:
+// a dash (with whatever spacing) becomes a comma, which keeps the line casual
+// and flowing. Deliberately conservative — it only touches punctuation and
+// spacing, never rewords, and preserves newlines so bundled posts keep one
+// change per line. Rewording the underlying phrasing is the voice rules' job.
+export function stripAiTells(text) {
+  return String(text)
+    .replace(/[ \t]*[—–][ \t]*/g, ', ') // — or – (any surrounding spaces) -> ", "
+    .replace(/,[ \t]*,/g, ',')                     // collapse a doubled comma the swap may create
+    .replace(/,([ \t]*[.;:!?])/g, '$1')            // ", ." -> "." when a dash sat before end punctuation
+    .replace(/[ \t]+([,.;:!?])/g, '$1')            // no space before punctuation
+    .replace(/[ \t]{2,}/g, ' ')                     // collapse runs of spaces
+    .replace(/[ \t]+$/gm, '');                      // trim trailing spaces per line
 }
 
 function envBool(name, fallback) {
@@ -1650,7 +1672,9 @@ ${wantRoutes ? `      "candidate_paths": string[],  // 1 to 3 URL paths most lik
 
 ${RUBRIC}
 
-You are the editor. Improve the draft below so it scores as high as possible on the rubric while staying strictly inside the voice rules. If the draft is already strong, tighten it; do not pad it. If the draft has multiple lines (one per bundled change), keep it multi-line — do not collapse it into one sentence, and do not add or drop lines.
+You are the editor. Improve the draft below so it scores as high as possible on the rubric while staying strictly inside the voice rules. If the draft is already strong, tighten it; do not pad it. If the draft has multiple lines (one per bundled change), keep it multi-line: do not collapse it into one sentence, and do not add or drop lines.
+
+Before returning, reread the draft and strip anything that reads as AI-written: em/en dashes, the "feature — benefit" appendage, rule-of-three lists, and the banned tell-words in the voice rules. Rewrite those spots in plain, casual, human phrasing rather than just deleting the punctuation.
 ${historyBlock}${prBlock}
 DRAFT: ${postText}
 COMMIT MESSAGE: ${commitMessage}
@@ -1665,6 +1689,15 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
       postText = finalDraft;
     } else {
       console.warn('Editor pass returned empty text; keeping original draft.');
+    }
+
+    // Final deterministic scrub of the mechanical AI tells (em dashes above all)
+    // the model still emits despite the voice rules. Runs on whatever we're
+    // about to post, edited or not.
+    const scrubbed = stripAiTells(postText);
+    if (scrubbed !== postText) {
+      console.log('Scrubbed AI writing tells (em/en dashes, spacing) from the post.');
+      postText = scrubbed;
     }
 
     // ---- 5. post + record ----
