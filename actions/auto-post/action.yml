@@ -60,7 +60,7 @@ inputs:
     required: false
     default: '2'
   post-scorer-license-key:
-    description: 'License key for the paid optimizer (@e4/post-scorer-pro). Without it you still get the free tier: every draft is scored and its weak spots logged, just not auto-optimized. Pass ${{ secrets.POST_SCORER_LICENSE_KEY }}.'
+    description: 'License key for the paid optimizer (@e4/post-scorer-pro). Without it you still get the free tier: every draft is scored and its weak spots logged, just not auto-optimized. Pass the caller''s POST_SCORER_LICENSE_KEY secret.'
     required: false
     default: ''
   gemini-model:
