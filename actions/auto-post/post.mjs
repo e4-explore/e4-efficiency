@@ -292,7 +292,7 @@ POST DRAFT: ${postText}
 COMMIT MESSAGE: ${commitMessage}
 
 Below are ${shots.length} screenshots, in order (index 0 first): ${shots.map((s, i) => `[${i}] ${s.path}`).join(', ')}.
-Pick the one that best SHOWS the change described — prefer visible content over empty states, error pages, or generic landing pages.
+Pick the one that best SHOWS the change described — prefer visible content over empty states, error pages, or generic landing pages. Also favor a TIGHT, change-focused framing where the subject fills the frame and reads clearly at thumbnail size in a feed; down-rank wide catalog/gallery/storybook views where the subject is small amid lots of whitespace.
 
 Return ONLY JSON: { "best_index": number, "reason": string }`,
     },
@@ -724,7 +724,7 @@ async function browseForBestFrame(ctx, startUrl, { postText, commitMessage, inte
 
 YOUR GOAL: get to the SPECIFIC component/screen the change is about and show it in the exact state described — do not settle for a generic landing / welcome / "Start" / overview page, which never shows a specific component's change.${targetLine}${stateLine}
 - To navigate a component catalog fast: if there's a search/filter box (often "Find components", "Search", ⌘K), TYPE the target component's name into it, then click the matching result — this is more reliable than hunting through nested nav. You may also expand a collapsed nav group (e.g. "Components") and click the item.
-- Prefer a shot where the component fills the frame and shows the FULL set of its variants/states together (a "Tones"/"Variants"/"States"/"All"/gallery view) over a single-instance "Playground"/demo, and over one small element on an empty canvas.
+- Prefer a shot where the component fills the frame and shows the FULL set of its variants/states together (a "Tones"/"Variants"/"States"/"All"/gallery view) over a single-instance "Playground"/demo, and over one small element on an empty canvas. BUT it has to stay legible at thumbnail size in a feed: if showing the full set shrinks each item to a tiny speck on a big canvas of whitespace, prefer a tighter cluster (a representative handful, zoomed in) where the detail actually reads. A wide catalog/storybook grid where the subject is small amid lots of empty space is a WEAK shot, not a strong one.
 - If the change is a focus/open/hover/expanded state (e.g. an accent border on a focused input, an open dropdown), reach it: type into or click the field to focus it, click a select to open it, hover to reveal.
 
 POST DRAFT: ${postText}
@@ -792,7 +792,7 @@ Return ONLY JSON:
     try {
       const pick = await gemini([
         {
-          text: `Choose the single most compelling screenshot to attach to this post. Prefer a clean, complete-looking state that clearly shows the change; reject anything that looks half-rendered, mid-transition, or broken.
+          text: `Choose the single most compelling screenshot to attach to this post. Prefer a clean, complete-looking state that clearly shows the change; reject anything that looks half-rendered, mid-transition, or broken. Favor a TIGHT, change-focused frame where the subject fills most of the image and reads clearly at thumbnail size in a feed; down-rank wide catalog/gallery/storybook grids where the subject is small amid lots of empty space.
 
 POST DRAFT: ${postText}
 COMMIT MESSAGE: ${commitMessage}
