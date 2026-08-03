@@ -70,7 +70,8 @@ const GEMINI_503_RETRY_DELAYS_MS = [2000, 5000];
 const RUBRIC = `
 Engagement rubric (what makes a post worth reading):
 - One idea per change: the change plus why it matters, in a single natural sentence.
-- The "why" is real product value ("MLS bets are in now"), never a restatement of the change ("to reflect broader coverage").
+- The "why" is real product value a stranger can feel ("MLS bets are in now"), never a restatement of the change ("to reflect broader coverage"), and never just the internal mechanism or the name of the library/system/theme used ("uses Carbon icons"). If the change is conceptual or visual, say what it now lets a user do or feel, not which system powers it.
+- Lead with the idea or the payoff, not the act of shipping. The first line has to earn the read on its own; a reader who doesn't know the product should still get why this is interesting.
 - Concrete beats abstract: name the thing ("live odds now refresh every 30s"), never "improved performance".
 - State it as a fact about the product, not a narrated action: "the 'Create App' button makes it faster to spin up a new project", not "We renamed the setup button to 'Create App' so it's easier to spin up a new project".
 - Sound like a person, not a changelog or a press release. Casual and direct beats stiff and formal.
@@ -88,7 +89,7 @@ function buildVoice(includeCommitLink) {
 Voice rules (follow strictly):
 - One statement per change: name the change, then why it matters, in a single natural sentence. e.g. "the 'Create App' button makes it faster to spin up a new project" rather than "We renamed the setup button to 'Create App' so it's easier to spin up a new project".
 - Write like a person talking, not a marketer or a changelog. Casual, plain, direct. Contractions are good (it's, you're, doesn't).
-- Never use "we", "our", or "I" as the subject, and never open with "We <verb>ed" or "Renamed/Added/Fixed X so Y". State the fact, don't narrate the act of changing it.
+- Never use "we", "our", or "I" as the subject. Never open with a changelog verb: no "Added/Fixed/Updated/Renamed/Improved/Introduced X" (with OR without a following "so Y"), and never "Added the ability to/for X". Those narrate the act of shipping instead of stating the idea. Lead with what the thing does or lets someone do (e.g. "Icons now change with the theme, not just the colors" rather than "Added different icon packs per theme").
 - Never the changelog pattern "X now does Y to reflect Z".
 
 Do NOT write like AI. Specifically:

@@ -10,14 +10,16 @@
 // the private pro code plus the continuously recalibrated weights/prompts that
 // ship on the moving v1 tag; a bypassed snapshot goes stale.
 //
-// PRODUCTION: replace PUBLIC_KEY_DER_B64 with your own key. Generate a keypair,
-// keep the private key in your signing service's secret store, and embed only
-// the public half here.
+// PRODUCTION KEY. The matching private key lives ONLY in the owner's secret
+// store (was written to .secrets/post-scorer-signing-private.pem at setup, which
+// is gitignored and must be moved to a real secret manager). To rotate: generate
+// a new ed25519 keypair, replace the base64 below with the new public half, and
+// re-sign any embedded test license.
 
 import { createPublicKey, verify as edVerify } from 'node:crypto';
 
-// Dev public key (ed25519, SPKI DER, base64). Swap for your production key.
-const PUBLIC_KEY_DER_B64 = 'MCowBQYDK2VwAyEAiwbPg8e+eLWs2Ai48Oeuh85qRdDSEkSistmxGICIBqU=';
+// Production public key (ed25519, SPKI DER, base64).
+const PUBLIC_KEY_DER_B64 = 'MCowBQYDK2VwAyEAn9AlPjFC0224cz+2T1EMRRUCL+uuAhP3+KGZX2ieSyA=';
 
 const PUBLIC_KEY = createPublicKey({
   key: Buffer.from(PUBLIC_KEY_DER_B64, 'base64'),

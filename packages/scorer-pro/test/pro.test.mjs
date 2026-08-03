@@ -2,10 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { evaluatePro, optimizePost, verifyLicenseKey } from '../src/index.mjs';
 
-// A dev-signed license (valid against the embedded dev public key). In real use
-// this comes from POST_SCORER_LICENSE_KEY. If the embedded key is rotated for
-// production, re-sign with scripts/sign-license.mjs and update this constant.
-const DEV_LICENSE = 'v1.eyJzdWIiOiJkZXZfZGVtbyIsInBsYW4iOiJwcm8iLCJpYXQiOjE3ODU3MzA3ODIsImV4cCI6MTgxNzI2Njc4Mn0.Pve-5o3CUuwvv1_OYRKPFDC4SUNidn838xUfvqjIxF5DN3Zai68KST2AVg6v9xaDUfpTQanlfpnTAQ1unkrZBw';
+// A license signed by the embedded PRODUCTION public key. In real use this comes
+// from POST_SCORER_LICENSE_KEY. If the key is rotated, re-sign with
+// scripts/sign-license.mjs (POST_SCORER_SIGNING_KEY=<private pem>) and update this.
+const DEV_LICENSE = 'v1.eyJzdWIiOiJlNC1leHBsb3JlLW93bmVyIiwicGxhbiI6InBybyIsImlhdCI6MTc4NTczNzAwMX0.H_mfGyUmZa5lbHrOeXJGwAsKkouGETviQ6Ym3tzGsR4X44pa-rRinIWvxWtuBiphSEPFBWw4aCYuj22y1mRJDA';
 
 // Stub LLM (no network): predicts probabilities + notes, and rewrites on demand.
 const stubLlm = async (prompt) => {

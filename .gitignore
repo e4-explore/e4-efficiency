@@ -4,3 +4,6 @@ package-lock.json
 
 # OS / editor cruft
 .DS_Store
+
+# Signing keys / local secrets (never commit)
+.secrets/
