@@ -1599,6 +1599,11 @@ ${wantRoutes ? `      "candidate_paths": string[],  // 1 to 3 URL paths most lik
   let imagePaths = [];
   let imageNotes = []; // human-readable descriptions, same order as imagePaths
   let mediaTypes = []; // 'image' | 'video', same order as imagePaths
+  // What the scorer predicted for the post that actually goes out — captured in
+  // step 4b and written into history so the analytics feedback loop can later
+  // compare predicted vs. real engagement and recalibrate. Null when the scorer
+  // is unavailable (vendored install without the free core).
+  let postPrediction = null;
   let previewProc = null;
 
   try {
@@ -1766,6 +1771,19 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
             console.log('Pro optimizer not enabled (no POST_SCORER_LICENSE_KEY). Publishing the editor\'s draft as-is; set a license + install @e4/post-scorer-pro to auto-optimize before posting.');
           }
         }
+
+        // Capture the prediction for the FINAL draft (post-optimize; postText may
+        // have changed above) so history records what the scorer expected — the
+        // training signal the analytics loop compares against real engagement.
+        // Deterministic + instant.
+        const finalDiag = await free.evaluatePost({ text: postText, hasMedia, mediaType }, { platform: 'x' });
+        postPrediction = {
+          score: finalDiag.score,
+          subscores: finalDiag.subscores,
+          has_media: hasMedia,
+          media_type: mediaType,
+          scorer_version: free.VERSION ?? null,
+        };
       } catch (err) {
         console.warn(`Scoring skipped (${err.message}); keeping edited draft.`);
       }
@@ -1869,6 +1887,8 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
         tweet_id: tweet.data.id,
         text: finalText,
         images: imageNotes,
+        posted_at: new Date().toISOString(), // when to start measuring from
+        predicted: postPrediction,            // scorer's expectation (null if unavailable)
       }) + '\n');
 
       const summary = process.env.GITHUB_STEP_SUMMARY;

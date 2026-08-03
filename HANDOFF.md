@@ -49,6 +49,19 @@ human in the loop. Read `SKILL.md`, `actions/auto-post/README.md`, and
     (move `v1` → consumers auto-update). Vendored mode: `install.sh` bundles the
     FREE core into `.github/auto-post/scorer/`; subscribers drop the PAID
     `scorer-pro/` in and set the license key to unlock auto-optimize.
+  - **Analytics feedback loop (in progress, paid):** the "gets better the more
+    it's used" flywheel. (1) post.mjs now records `predicted` {score,subscores}
+    + `posted_at` into each history.jsonl row (the training signal). (2)
+    `scorer-pro/src/metrics.mjs` + `bin/ingest-analytics.mjs` ingest an X Premium
+    analytics CSV export, match rows to posts (by tweet_id, then text), compute
+    the ACTUAL engagement score with the SAME weights the scorer predicts with
+    (Σ w × rate-per-impression), and write `actual` back into history. Metrics
+    source is the user's X **Premium CSV export** (their X API dev tier is Free =
+    no analytics reads). NOTE: predicted (optimistic feature priors) and actual
+    (real per-impression rates) are on different scales — ranking is preserved,
+    the not-yet-built **calibrator** (`calibrate.mjs` → per-account
+    `calibration.json` the scorer loads) closes the scale gap + tunes priors.
+    Needs ~20+ measured posts before calibration is meaningful.
 
 ## Pipeline
 

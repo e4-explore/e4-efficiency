@@ -8,7 +8,8 @@
     ".": "./src/index.mjs"
   },
   "bin": {
-    "post-score-pro": "./bin/score-pro.mjs"
+    "post-score-pro": "./bin/score-pro.mjs",
+    "post-scorer-ingest": "./bin/ingest-analytics.mjs"
   },
   "scripts": {
     "test": "node --test",

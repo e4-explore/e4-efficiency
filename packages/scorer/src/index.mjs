@@ -14,6 +14,10 @@
 
 import * as x from './platforms/x/index.mjs';
 
+// Bumped when weights/heuristics change, so recorded predictions can be traced
+// to the model that produced them (keep in step with package.json).
+export const VERSION = '0.1.0';
+
 const PLATFORMS = { x };
 
 export function getPlatform(name = 'x') {
