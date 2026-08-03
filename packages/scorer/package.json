@@ -1,0 +1,20 @@
+{
+  "name": "@e4/post-scorer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Clean-room, algorithm-informed evaluator that scores a social post before it's published and iterates it toward maximum reach/engagement. X (Twitter) first.",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./x": "./src/platforms/x/index.mjs"
+  },
+  "bin": {
+    "post-score": "./bin/score.mjs"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

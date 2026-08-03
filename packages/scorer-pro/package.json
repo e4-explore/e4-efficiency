@@ -1,0 +1,23 @@
+{
+  "name": "@e4/post-scorer-pro",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Paid tier for @e4/post-scorer: LLM engagement prediction, written suggestions, and the iterate-to-maximize auto-optimizer. Requires a license key.",
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "bin": {
+    "post-score-pro": "./bin/score-pro.mjs"
+  },
+  "scripts": {
+    "test": "node --test",
+    "sign": "node scripts/sign-license.mjs"
+  },
+  "dependencies": {
+    "@e4/post-scorer": "file:../scorer"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

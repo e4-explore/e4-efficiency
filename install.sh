@@ -31,6 +31,17 @@ cp "$SKILL_DIR/templates/post.mjs"            "$SCRIPT_DIR/post.mjs"
 cp "$SKILL_DIR/templates/package.json"        "$SCRIPT_DIR/package.json"
 cp "$SKILL_DIR/templates/config.example.json" "$SCRIPT_DIR/config.example.json"
 
+# Bundle the FREE post-scorer core (@e4/post-scorer) so vendored installs get
+# the pre-post score + weak-spot diagnosis. It's zero-dependency pure ESM;
+# post.mjs loads it from ./scorer/. The PAID optimizer (@e4/post-scorer-pro) is
+# NOT bundled — subscribers drop it into .github/auto-post/scorer-pro/ and set
+# POST_SCORER_LICENSE_KEY to unlock auto-optimize. (Referenced-mode installs get
+# both from the tagged repo and skip this copy entirely.)
+rm -rf "$SCRIPT_DIR/scorer"
+mkdir -p "$SCRIPT_DIR/scorer"
+cp -R "$SKILL_DIR/packages/scorer/src"          "$SCRIPT_DIR/scorer/src"
+cp    "$SKILL_DIR/packages/scorer/package.json" "$SCRIPT_DIR/scorer/package.json"
+
 cat <<EOF
 
 Installed into $TARGET:

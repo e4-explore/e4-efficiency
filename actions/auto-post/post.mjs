@@ -1282,6 +1282,29 @@ function listRouteFiles(repoRoot, max = 200) {
 
 // ---------------------------------------------------------------- main
 
+// Post-scorer loaders. Two tiers, both loaded lazily and relative to this file:
+//   • FREE  @e4/post-scorer      — deterministic score + subscores + named
+//                                  issues (the diagnosis). Always run when found.
+//   • PRO   @e4/post-scorer-pro  — written fixes + the auto-optimizer. Gated by
+//                                  a license key (POST_SCORER_LICENSE_KEY).
+// Each resolves in both distribution modes: referenced (packages live beside the
+// action in the checked-out repo) and vendored (install.sh drops the free core
+// into ./scorer/; the paid ./scorer-pro/ is installed by subscribers). Because
+// the packages ship inside the same tag as this action, moving the v1 tag pushes
+// scorer improvements to referenced-mode consumers automatically. All failures
+// are soft: a missing package just means that tier is skipped and the validated
+// editor+publish path runs unchanged.
+async function tryImport(relPaths) {
+  for (const rel of relPaths) {
+    try {
+      return await import(new URL(rel, import.meta.url));
+    } catch { /* try next candidate */ }
+  }
+  return null;
+}
+const loadScorerFree = () => tryImport(['../../packages/scorer/src/index.mjs', './scorer/src/index.mjs']);
+const loadScorerPro = () => tryImport(['../../packages/scorer-pro/src/index.mjs', './scorer-pro/src/index.mjs']);
+
 async function main() {
   const {
     GITHUB_TOKEN,
@@ -1314,6 +1337,20 @@ async function main() {
   const includeCommitLink = envBool('INCLUDE_COMMIT_LINK', config.includeCommitLink ?? false);
   // Dry run: run the whole pipeline but skip the actual X publish + history write.
   const DRY_RUN = envBool('DRY_RUN', false);
+
+  // Score-optimize: after the editor pass, score the draft against X's ranking
+  // model (via packages/scorer) and, if it's below target, iterate it higher
+  // while staying inside the voice rules. On by default; additive and skippable
+  // (turns off with OPTIMIZE_POST=false, and self-skips if the scorer or LLM is
+  // unavailable). Target is the 0–100 score to stop at; iterations caps rewrites.
+  const OPTIMIZE_POST = envBool('OPTIMIZE_POST', config.optimizePost ?? true);
+  const OPTIMIZE_TARGET = Number.parseInt(process.env.OPTIMIZE_TARGET || config.optimizeTarget || '80', 10) || 80;
+  const OPTIMIZE_ITERATIONS = Math.max(0, Math.min(4, Number.parseInt(
+    process.env.OPTIMIZE_ITERATIONS || config.optimizeIterations || '2', 10,
+  ) || 2));
+  // License key for the paid optimizer (@e4/post-scorer-pro). Absent = free tier:
+  // the draft is still scored and its weak spots logged, but not auto-optimized.
+  const SCORER_LICENSE_KEY = process.env.POST_SCORER_LICENSE_KEY || config.postScorerLicenseKey || '';
 
   let routes = Array.isArray(config.routes) ? config.routes : undefined;
   if (process.env.ROUTES && process.env.ROUTES.trim()) {
@@ -1689,6 +1726,49 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
       postText = finalDraft;
     } else {
       console.warn('Editor pass returned empty text; keeping original draft.');
+    }
+
+    // ---- 4b. algorithm score + optimization (additive; skips cleanly if unavailable) ----
+    // FREE: score the edited draft the way X's Grok/Phoenix ranking model would
+    // and log its weak spots. PRO (licensed): iterate it higher WITHOUT leaving
+    // the voice rules. Purely additive — the editor above and the publish below
+    // are untouched; on any trouble (no package, LLM hiccup) we keep the draft.
+    const free = await loadScorerFree();
+    if (free) {
+      const hasMedia = imagePaths.length > 0;
+      const mediaType = mediaTypes[0] === 'video' ? 'video' : (hasMedia ? 'image' : null);
+      const scoreInput = { text: postText, hasMedia, mediaType };
+      try {
+        const diag = await free.evaluatePost(scoreInput, { platform: 'x' });
+        console.log(`Post score (free): ${diag.score}/100. Weak spots: ${
+          diag.issues.length ? diag.issues.map((i) => `${i.lever}[${i.severity}]`).join(', ') : 'none'}.`);
+
+        if (OPTIMIZE_POST && OPTIMIZE_ITERATIONS > 0) {
+          const pro = await loadScorerPro();
+          if (pro && SCORER_LICENSE_KEY) {
+            try {
+              const constraints = `${VOICE}\n\n${RUBRIC}\n\n- Keep the same facts and meaning as the draft.\n- If the draft has multiple lines (one per bundled change), keep it multi-line: do not add, drop, or merge lines.`;
+              // The optimizer's LLM interface is (prompt) => parsed JSON — exactly
+              // what gemini() returns — so we adapt it inline (no extra import).
+              const scoreLlm = (prompt) => gemini([{ text: prompt }]);
+              const result = await pro.optimizePost(scoreInput, {
+                platform: 'x', llm: scoreLlm, constraints,
+                targetScore: OPTIMIZE_TARGET, maxIterations: OPTIMIZE_ITERATIONS,
+                licenseKey: SCORER_LICENSE_KEY,
+              });
+              console.log(`Post score (pro): ${result.iterations[0]?.score} -> ${result.best?.evaluation?.score}/100 (${result.reason}).`);
+              if (result.improved && result.best?.text) postText = result.best.text;
+            } catch (err) {
+              if (err.code === 'UNLICENSED') console.log('Pro optimizer: invalid license; posting the editor\'s draft.');
+              else console.warn(`Pro optimization skipped (${err.message}); keeping edited draft.`);
+            }
+          } else if (!SCORER_LICENSE_KEY) {
+            console.log('Pro optimizer not enabled (no POST_SCORER_LICENSE_KEY). Publishing the editor\'s draft as-is; set a license + install @e4/post-scorer-pro to auto-optimize before posting.');
+          }
+        }
+      } catch (err) {
+        console.warn(`Scoring skipped (${err.message}); keeping edited draft.`);
+      }
     }
 
     // Final deterministic scrub of the mechanical AI tells (em dashes above all)

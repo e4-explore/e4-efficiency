@@ -47,6 +47,22 @@ inputs:
     description: 'Append the commit URL to the post text ("true"/"false").'
     required: false
     default: 'false'
+  optimize-post:
+    description: 'When "true" (default), after the editor pass the draft is scored the way X''s ranking model would score it (via the bundled post-scorer) and, if below the target, iterated higher while staying inside the voice rules. Additive and safe: the editor and publish steps are unchanged, and it self-skips on any trouble. Set "false" to publish the editor''s draft as-is.'
+    required: false
+    default: 'true'
+  optimize-target:
+    description: 'Target 0–100 post score to stop optimizing at (default 80). Higher chases more rewrites; the best-scoring version is always kept regardless.'
+    required: false
+    default: '80'
+  optimize-iterations:
+    description: 'Max rewrite attempts during score optimization, 0–4 (default 2). 0 disables it just like optimize-post:false.'
+    required: false
+    default: '2'
+  post-scorer-license-key:
+    description: 'License key for the paid optimizer (@e4/post-scorer-pro). Without it you still get the free tier: every draft is scored and its weak spots logged, just not auto-optimized. Pass ${{ secrets.POST_SCORER_LICENSE_KEY }}.'
+    required: false
+    default: ''
   gemini-model:
     description: 'Pin a specific Gemini model id; otherwise the built-in fallback chain is used.'
     required: false
@@ -154,6 +170,10 @@ runs:
         INTERACTION_VIDEOS: ${{ inputs.interaction-videos }}
         MAX_BUNDLE_IMAGES: ${{ inputs.max-bundle-images }}
         INCLUDE_COMMIT_LINK: ${{ inputs.include-commit-link }}
+        OPTIMIZE_POST: ${{ inputs.optimize-post }}
+        OPTIMIZE_TARGET: ${{ inputs.optimize-target }}
+        OPTIMIZE_ITERATIONS: ${{ inputs.optimize-iterations }}
+        POST_SCORER_LICENSE_KEY: ${{ inputs.post-scorer-license-key }}
         GEMINI_MODEL: ${{ inputs.gemini-model }}
         GEMINI_API_KEY: ${{ inputs.gemini-api-key }}
         X_API_KEY: ${{ inputs.x-api-key }}

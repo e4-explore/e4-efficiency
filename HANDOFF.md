@@ -22,7 +22,33 @@ human in the loop. Read `SKILL.md`, `actions/auto-post/README.md`, and
   self-contained workflow into a consumer's `.github/`. Deploy-gate / commit-link
   driven by repo variables.
 - `post.mjs` is identical in `templates/` and `actions/auto-post/`; it runs in
-  both modes via `AUTOPOST_DATA_DIR`. Keep the two copies in sync.
+  both modes via `AUTOPOST_DATA_DIR`. Keep the two copies in sync
+  (`cp actions/auto-post/post.mjs templates/post.mjs` after any edit).
+- **Post-scorer (two tiers, both in this repo):** a clean-room evaluator that
+  scores a post the way X's Grok/Phoenix ranking model would. Split on the line
+  "does it need an LLM call?" — free = deterministic diagnosis, paid = LLM +
+  rewriting.
+  - **`packages/scorer` (`@e4/post-scorer`) — FREE:** zero-dependency,
+    deterministic. `evaluatePost` returns score + subscores + **named issues**
+    (which levers are weak, no fix text). CLI `bin/score.mjs`, `node --test`.
+  - **`packages/scorer-pro` (`@e4/post-scorer-pro`) — PAID:** builds on free via
+    relative imports (`../../scorer/src/...`, so no npm install needed). Adds LLM
+    engagement prediction, **written fixes** (`suggest.mjs` maps lever ids → text),
+    and the **auto-optimizer** (`optimize.mjs`). Every entry point calls
+    `assertLicensed` — offline ed25519 key check (`license.mjs` holds the PUBLIC
+    key; `scripts/sign-license.mjs` signs server-side from `POST_SCORER_SIGNING_KEY`).
+    Throws `code:'UNLICENSED'` without a valid key. **The embedded public key is a
+    DEV key** — regenerate for production and re-sign the test's `DEV_LICENSE`.
+  - **Wiring (post.mjs step 4b):** `loadScorerFree()` always runs and logs the
+    score + weak spots; `loadScorerPro()` runs `optimizePost` only when
+    `POST_SCORER_LICENSE_KEY` is set + the pro package resolves. Both loaders try
+    referenced (`../../packages/...`) then vendored (`./scorer/`, `./scorer-pro/`)
+    paths. Inputs: `optimize-post`/`optimize-target`/`optimize-iterations` +
+    `post-scorer-license-key`. Additive + self-skipping; publish path unchanged.
+  - **Distribution:** referenced mode gets both packages from the tagged repo
+    (move `v1` → consumers auto-update). Vendored mode: `install.sh` bundles the
+    FREE core into `.github/auto-post/scorer/`; subscribers drop the PAID
+    `scorer-pro/` in and set the license key to unlock auto-optimize.
 
 ## Pipeline
 
