@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "post-scorer-ui",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["apps/web/serve.mjs"],
+      "port": 8099,
+      "url": "http://localhost:8099/"
+    }
+  ]
+}
