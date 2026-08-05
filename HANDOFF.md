@@ -45,6 +45,12 @@ human in the loop. Read `SKILL.md`, `actions/auto-post/README.md`, and
     referenced (`../../packages/...`) then vendored (`./scorer/`, `./scorer-pro/`)
     paths. Inputs: `optimize-post`/`optimize-target`/`optimize-iterations` +
     `post-scorer-license-key`. Additive + self-skipping; publish path unchanged.
+    **Voice gate (2026-08-04):** the optimizer is grounded in the change context
+    (commit/clauses/PR) so any take/question must be true to what shipped, and a
+    deterministic `lintVoice()` gate rejects a higher-scoring rewrite that raises
+    the mechanical voice-violation count (banned opener, reply-farm clickbait,
+    emoji, em dash, …) vs the editor's draft — the scorer optimizes X-engagement
+    and has no brand/voice term, so this stops it trading voice for reply-bait.
   - **Distribution:** referenced mode gets both packages from the tagged repo
     (move `v1` → consumers auto-update). Vendored mode: `install.sh` bundles the
     FREE core into `.github/auto-post/scorer/`; subscribers drop the PAID

@@ -28,6 +28,8 @@ ${constraints || '- Keep the same meaning and facts.\n- Sound like a real person
 
 Rewrite the post to score higher. Keep it truthful to the original meaning. Do not add hashtags or emoji unless they genuinely help. Do not fabricate media or links.
 
+Any opinion, take, or question you use must be genuinely supported by the post and the constraints/context above, never invented to farm engagement, and never clickbait. If there's no honest, specific take to make, keep it a clean factual post rather than forcing a question.
+
 Return ONLY JSON: { "post_text": string, "rationale": string }`;
 }
 

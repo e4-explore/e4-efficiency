@@ -72,6 +72,7 @@ Engagement rubric (what makes a post worth reading):
 - One idea per change: the change plus why it matters, in a single natural sentence.
 - The "why" is real product value a stranger can feel ("MLS bets are in now"), never a restatement of the change ("to reflect broader coverage"), and never just the internal mechanism or the name of the library/system/theme used ("uses Carbon icons"). If the change is conceptual or visual, say what it now lets a user do or feel, not which system powers it.
 - Lead with the idea or the payoff, not the act of shipping. The first line has to earn the read on its own; a reader who doesn't know the product should still get why this is interesting.
+- A genuine take or an honest question can lift a post from informative to engaging, but only when it's TRUE to the change and something a real builder would actually say. It has to be earned by the substance, never manufactured, never clickbait or reply-bait. No honest take to make? Ship the clean statement.
 - Concrete beats abstract: name the thing ("live odds now refresh every 30s"), never "improved performance".
 - State it as a fact about the product, not a narrated action: "the 'Create App' button makes it faster to spin up a new project", not "We renamed the setup button to 'Create App' so it's easier to spin up a new project".
 - Sound like a person, not a changelog or a press release. Casual and direct beats stiff and formal.
@@ -100,6 +101,12 @@ Do NOT write like AI. Specifically:
 - No hype words: "amazing", "exciting", "thrilled", "stoked", "huge", "massive".
 - No exclamation marks. No emojis anywhere. No hashtags unless they genuinely add reach.
 ${limitLine}
+
+Engagement, but only when it's honest:
+- A single genuine take or one honest question is welcome after the statement WHEN there is a real one to make: a specific opinion or tradeoff a thoughtful builder would actually voice about this exact change, true to what shipped and adding real insight. When there isn't one, just state the thing well and stop. A clean factual post beats a forced take.
+- Never manufacture engagement. No clickbait or reply-farming ("agree?", "thoughts?", "am I wrong?", "who else", "retweet if"), no fake controversy, no rage-bait, no question asked only to pull replies.
+- Never trash, dunk on, or undercut the thing you're announcing. A real, specific, defensible tradeoff is fair to raise, but frame it as a tradeoff, not as calling your own work bad.
+- Still one idea: a take or question extends the statement, it doesn't bolt on a second unrelated point.
 - If the change is purely internal with no user impact, say so plainly; don't dress it up as a feature.
 - If the push bundles multiple distinct changes, put each on its own line (a
   short list, no bullets/numbering) instead of one run-on sentence. See the
@@ -162,6 +169,32 @@ export function stripAiTells(text) {
     .replace(/[ \t]+([,.;:!?])/g, '$1')            // no space before punctuation
     .replace(/[ \t]{2,}/g, ' ')                     // collapse runs of spaces
     .replace(/[ \t]+$/gm, '');                      // trim trailing spaces per line
+}
+
+// Deterministic voice-rule lint. Returns the mechanical voice violations we can
+// read straight off the text — the ones the optimizer tends to reintroduce when
+// it chases the engagement score. Semantic judgments (is a take genuine, is a
+// question honest vs clickbait beyond the obvious farm phrases) stay with the
+// LLM/constraints; this catches the checkable ones so the score-optimizer can
+// never trade them away. Used as a gate: the optimizer may not raise this count.
+export function lintVoice(text) {
+  const t = String(text || '');
+  const first = (t.split('\n').find((l) => l.trim()) || '').trim();
+  const violations = [];
+  // Banned changelog opener ("Added/Fixed/Updated X…") — voice leads with the idea.
+  if (/^(added|fixed|updated|renamed|improved|introduced|refactored|removed|changed|shipped|created|implemented)\b/i.test(first)) {
+    violations.push({ rule: 'changelog-opener', detail: first.slice(0, 40) });
+  }
+  // Cheap reply-farming phrases (clickbait) — a genuine question is fine, these aren't.
+  const farm = t.match(/\b(?:agree|thoughts)\?|\b(?:am i wrong|change my mind|who else|retweet if|tell me below|like if|comment below|sound off)\b|\bdrop a (?:reply|comment|like|❤)/i);
+  if (farm) violations.push({ rule: 'reply-farm', detail: farm[0] });
+  if (/[—–]/.test(t)) violations.push({ rule: 'em-dash' });
+  if (/[!]/.test(t)) violations.push({ rule: 'exclamation' });
+  if (/\p{Extended_Pictographic}/u.test(t)) violations.push({ rule: 'emoji' });
+  const hashtags = (t.match(/(^|\s)#[A-Za-z]\w*/g) || []).length;
+  if (hashtags > 1) violations.push({ rule: 'hashtags', detail: String(hashtags) });
+  if (t.length > 280) violations.push({ rule: 'over-length', detail: String(t.length) });
+  return violations;
 }
 
 function envBool(name, fallback) {
@@ -1753,7 +1786,17 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
           const pro = await loadScorerPro();
           if (pro && SCORER_LICENSE_KEY) {
             try {
-              const constraints = `${VOICE}\n\n${RUBRIC}\n\n- Keep the same facts and meaning as the draft.\n- If the draft has multiple lines (one per bundled change), keep it multi-line: do not add, drop, or merge lines.`;
+              // The editor's on-voice draft — the floor the optimizer isn't
+              // allowed to make worse (see the voice gate below).
+              const editorDraft = postText;
+              // Ground any take/question in what actually shipped, so the
+              // optimizer can only sharpen a REAL angle, not invent one.
+              const changeContext = [
+                commitMessage && `Commit: ${commitMessage.split('\n')[0]}`,
+                changes.length ? `Change(s): ${changes.map((c) => c.clause).join(' | ')}` : '',
+                pr?.title ? `PR: ${pr.title}` : '',
+              ].filter(Boolean).join('\n');
+              const constraints = `${VOICE}\n\n${RUBRIC}\n\n- Keep the same facts and meaning as the draft.\n- If the draft has multiple lines (one per bundled change), keep it multi-line: do not add, drop, or merge lines.\n- Any take or question you add MUST be genuinely supported by the change context below. Do not invent opinions, criticisms, or claims, and never add a question just to farm replies. If there is no honest, specific take to make, keep the clean factual statement rather than forcing one.\n\nCHANGE CONTEXT (a take or question must be true to this):\n${changeContext || '(the draft above is all that is known)'}`;
               // The optimizer's LLM interface is (prompt) => parsed JSON — exactly
               // what gemini() returns — so we adapt it inline (no extra import).
               const scoreLlm = (prompt) => gemini([{ text: prompt }]);
@@ -1763,7 +1806,19 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
                 licenseKey: SCORER_LICENSE_KEY,
               });
               console.log(`Post score (pro): ${result.iterations[0]?.score} -> ${result.best?.evaluation?.score}/100 (${result.reason}).`);
-              if (result.improved && result.best?.text) postText = result.best.text;
+              // Voice gate: a higher score is only worth taking if it didn't cost
+              // voice compliance. The optimizer may not introduce MORE mechanical
+              // voice violations than the editor's draft had (banned opener,
+              // reply-farm clickbait, emoji, em dash…); if it does, keep the draft.
+              if (result.improved && result.best?.text) {
+                const candidate = stripAiTells(result.best.text);
+                const gained = lintVoice(candidate).length - lintVoice(stripAiTells(editorDraft)).length;
+                if (gained > 0) {
+                  console.warn(`Optimizer raised voice violations (+${gained}: ${lintVoice(candidate).map((v) => v.rule).join(', ')}); keeping the editor's draft over the higher-scoring rewrite.`);
+                } else {
+                  postText = result.best.text;
+                }
+              }
             } catch (err) {
               if (err.code === 'UNLICENSED') console.log('Pro optimizer: invalid license; posting the editor\'s draft.');
               else console.warn(`Pro optimization skipped (${err.message}); keeping edited draft.`);
@@ -1798,6 +1853,10 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
       console.log('Scrubbed AI writing tells (em/en dashes, spacing) from the post.');
       postText = scrubbed;
     }
+    // Surface any voice violations that survived (e.g. an opener the editor kept),
+    // so the run log shows them even when we couldn't auto-fix.
+    const residual = lintVoice(postText);
+    if (residual.length) console.warn(`Voice lint on final post: ${residual.map((v) => v.rule).join(', ')}.`);
 
     // ---- 5. post + record ----
 
