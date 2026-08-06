@@ -2,11 +2,11 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "post-scorer-ui",
-      "runtimeExecutable": "node",
-      "runtimeArgs": ["apps/web/serve.mjs"],
-      "port": 8099,
-      "url": "http://localhost:8099/"
+      "name": "post-scorer-api",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "apps/api", "run", "dev"],
+      "port": 8787,
+      "url": "http://localhost:8787/api/v1/health"
     }
   ]
 }
