@@ -9,5 +9,10 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "wrangler": "^4.119.0"
+  }
 }
