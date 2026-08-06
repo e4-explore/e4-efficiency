@@ -31,6 +31,14 @@ export default {
       return handleScore(request, env, origin);
     }
 
+    if (pathname.startsWith('/api/v1/pro/')) {
+      // Paid tier — not available this phase. Auth seam reserved: when accounts +
+      // Stripe land, these routes read `Authorization: Bearer <token>` and return
+      // UNAUTHENTICATED / UNLICENSED, then import @e4/post-scorer-pro server-side.
+      if (request.method !== 'POST') return error('METHOD_NOT_ALLOWED', 'Use POST.', { status: 405, origin, env });
+      return error('NOT_AVAILABLE', 'The pro tier is not available yet.', { status: 501, origin, env });
+    }
+
     return error('NOT_FOUND', 'Unknown route.', { status: 404, origin, env });
   },
 };

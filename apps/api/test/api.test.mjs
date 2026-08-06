@@ -82,3 +82,14 @@ test('score rejects GET with 405', async () => {
   const res = await worker.fetch(req('/api/v1/score', { method: 'GET' }), env);
   assert.equal(res.status, 405);
 });
+
+test('pro route returns 501 NOT_AVAILABLE', async () => {
+  const res = await worker.fetch(req('/api/v1/pro/optimize', { method: 'POST', body: { text: 'hi' } }), env);
+  assert.equal(res.status, 501);
+  assert.equal((await res.json()).code, 'NOT_AVAILABLE');
+});
+
+test('pro route rejects GET with 405', async () => {
+  const res = await worker.fetch(req('/api/v1/pro/optimize', { method: 'GET' }), env);
+  assert.equal(res.status, 405);
+});
