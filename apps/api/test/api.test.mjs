@@ -41,3 +41,44 @@ test('unknown route returns 404 with error shape', async () => {
   assert.equal(res.status, 404);
   assert.equal((await res.json()).code, 'NOT_FOUND');
 });
+
+test('POST /api/v1/score returns the score shape for a real draft', async () => {
+  const res = await worker.fetch(
+    req('/api/v1/score', { method: 'POST', body: { text: 'what would you build first?', hasMedia: false, mediaType: null, hasLinkInReply: false } }),
+    env,
+  );
+  assert.equal(res.status, 200);
+  const j = await res.json();
+  assert.equal(typeof j.score, 'number');
+  for (const k of ['engagement', 'safety', 'reach', 'hook', 'clarity']) assert.equal(typeof j.subscores[k], 'number');
+  assert.ok(Array.isArray(j.issues));
+  assert.equal(j.tier, 'free');
+  assert.equal(typeof j.version, 'string');
+  assert.equal(res.headers.get('access-control-allow-origin'), ORIGIN);
+});
+
+test('score rejects empty text with 400', async () => {
+  const res = await worker.fetch(req('/api/v1/score', { method: 'POST', body: { text: '  ' } }), env);
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).code, 'BAD_REQUEST');
+});
+
+test('score rejects invalid JSON with 400', async () => {
+  const res = await worker.fetch(req('/api/v1/score', { method: 'POST', body: '{not json' }), env);
+  assert.equal(res.status, 400);
+});
+
+test('score rejects invalid mediaType with 400', async () => {
+  const res = await worker.fetch(req('/api/v1/score', { method: 'POST', body: { text: 'hi', mediaType: 'gif' } }), env);
+  assert.equal(res.status, 400);
+});
+
+test('score rejects an oversize body with 413', async () => {
+  const res = await worker.fetch(req('/api/v1/score', { method: 'POST', body: { text: 'x'.repeat(9000) } }), env);
+  assert.equal(res.status, 413);
+});
+
+test('score rejects GET with 405', async () => {
+  const res = await worker.fetch(req('/api/v1/score', { method: 'GET' }), env);
+  assert.equal(res.status, 405);
+});
