@@ -1,0 +1,9 @@
+name = "post-scorer-api"
+main = "src/index.mjs"
+compatibility_date = "2026-08-05"
+
+# Public UI origins allowed to call the API (CORS allowlist), comma-separated.
+# Dev: the Pages dev server on :8788. Prod value is filled in at deploy time
+# (Task 8) once the Pages domain is known.
+[vars]
+ALLOWED_ORIGINS = "http://localhost:8788"

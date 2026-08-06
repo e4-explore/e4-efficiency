@@ -782,11 +782,14 @@ git commit -m "chore: scaffold public post-scorer-web thin client"
 
 - [ ] **Step 1: Copy the original UI as the starting point**
 
+Task 5 removed `apps/web` on this feature branch, but `main` still has it, so
+pull the original from there (stable regardless of how many commits have landed):
+
 ```bash
-cp /Users/ethangrove/e4-efficiency/apps/web/index.html /Users/ethangrove/post-scorer-web/index.html 2>/dev/null \
-  || git -C /Users/ethangrove/e4-efficiency show HEAD~1:apps/web/index.html > /Users/ethangrove/post-scorer-web/index.html
+git -C /Users/ethangrove/e4-efficiency show main:apps/web/index.html > /Users/ethangrove/post-scorer-web/index.html
 ```
-(The fallback pulls it from git if `apps/web` was already removed in Task 5.)
+(If the efficiency work was done on a differently-named base branch, substitute
+that branch for `main`.)
 
 - [ ] **Step 2: Swap the scorer import for the config import**
 
