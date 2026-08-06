@@ -1,0 +1,13 @@
+{
+  "name": "@e4/post-scorer-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "HTTP API for the post-scorer: free /api/v1/score runs @e4/post-scorer server-side; pro tier stubbed. Cloudflare Worker.",
+  "scripts": {
+    "test": "node --test",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "engines": { "node": ">=20" }
+}
