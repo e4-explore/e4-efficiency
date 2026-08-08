@@ -35,7 +35,10 @@ When a commit lands on `main`:
    drives the real interaction (drag a row to reorder, expand a panel, switch a
    tab) with a synthetic cursor and saves a short mp4 (needs ffmpeg — present on
    GitHub-hosted runners; falls back to a still otherwise). On by default,
-   disable with `interaction-videos: false`.
+   disable with `interaction-videos: false`. Recordings get a cinematic zoom
+   camera: after the showcase interaction lands, the view ease-zooms into the
+   result, holds, and eases back out — rendered live in the page so it stays
+   pixel-sharp. On by default, disable with `zoom-camera: false`.
 4. A vision pass verifies each image actually shows its change; if it doesn't,
    the model maps that change's files to the repo's route files to find where
    it renders and retries there. If nothing can be confirmed to show the change,
@@ -169,6 +172,10 @@ line — same statement rules, no connective words between them.
   expand, tab switch, hover reveal) is recorded — the loop drives the real
   interaction with a synthetic cursor and posts a short mp4 instead of a still
   (needs ffmpeg; falls back to a still). On by default (`interaction-videos`)
+- ✅ Zoom camera: recorded clips ease-zoom into the showcase interaction, hold
+  on the result, and ease back out — cinematic FocuSee-style framing with the
+  cursor riding along, live in the page and pixel-sharp. On by default
+  (`zoom-camera`); purely presentational, degrades to a flat clip on trouble
 - ✅ Vision verification: a shot that doesn't visibly show the change triggers
   a widened route search over the repo's page files before falling back
 - ✅ Bundled changes: a push with a few distinct, separately-noticeable
@@ -192,7 +199,6 @@ an issue first.
 - Batch backfill (post a range of commits in one run)
 - Engagement-based learning (likes/impressions feeding back into the prompt —
   requires X analytics beyond the free API tier)
-- Screen recordings / video posts
 - Filtering chore/deps/docs commits
 - Multiple social platforms (Bluesky, Mastodon, LinkedIn)
 - Multiple X accounts per repo
