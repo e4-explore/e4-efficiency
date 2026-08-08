@@ -995,7 +995,21 @@ const CURSOR_JS = `(() => {
   s.textContent = '*{-webkit-user-select:none!important;user-select:none!important}';
   document.head.appendChild(s);
   window.__apMoveCursor = (x, y) => { c.style.left = x + 'px'; c.style.top = y + 'px'; };
-  window.__apPressCursor = (down) => { c.style.transform = down ? 'scale(.8)' : 'scale(1)'; };
+  // Press squish and camera zoom compose into one transform. The cursor lives
+  // on <html>, outside the zoomed <body>, so the camera doesn't scale it —
+  // __apZoomCursor grows it in step so it reads as part of the zoomed scene.
+  let pressed = false, camScale = 1;
+  const apply = () => { c.style.transform = 'scale(' + ((pressed ? 0.8 : 1) * camScale) + ')'; };
+  window.__apPressCursor = (down) => { pressed = down; c.style.transition = 'transform .05s ease-out'; apply(); };
+  window.__apZoomCursor = (s, ms) => { camScale = s; c.style.transition = 'transform ' + (ms || 50) + 'ms cubic-bezier(.22,1,.36,1)'; apply(); };
+  // Eased reposition used by the camera so the sprite rides along with the
+  // zooming content (it lives on <html>, outside the transformed <body>);
+  // restores the instant left/top afterwards so drag tracking stays snappy.
+  window.__apGlideCursor = (x, y, ms) => {
+    c.style.transition = 'transform ' + ms + 'ms cubic-bezier(.22,1,.36,1), left ' + ms + 'ms cubic-bezier(.22,1,.36,1), top ' + ms + 'ms cubic-bezier(.22,1,.36,1)';
+    c.style.left = x + 'px'; c.style.top = y + 'px';
+    setTimeout(() => { c.style.transition = 'transform .05s ease-out'; }, ms + 60);
+  };
 })()`;
 
 export async function ensureCursor(page) {
@@ -1028,6 +1042,87 @@ export async function apDrag(page, from, to, { steps = 26, holdMs = 150 } = {}) 
   await page.mouse.up();
   await page.evaluate(() => { window.__apPressCursor && window.__apPressCursor(false); window.getSelection && window.getSelection().removeAllRanges(); }).catch(() => {});
   await sleep(550); // let the drop animation land
+}
+
+// ---------------------------------------------------------------- zoom camera
+//
+// FocuSee-style cinematic camera for recordings: ease-zoom in around the
+// showcase interaction, hold, ease back out. Implemented as a CSS transform on
+// the top document's <body>, so Playwright's recorder captures it directly —
+// no post-processing, and Chromium re-rasterizes at the new scale so the
+// punch-in stays pixel-sharp. The synthetic cursor sits on <html> (outside the
+// transformed subtree), so its viewport coordinates stay valid while zoomed.
+const CAMERA_JS = `(() => {
+  if (window.__apCameraInstalled) return;
+  window.__apCameraInstalled = true;
+  // (fx, fy) is the focus point in viewport px; only ever called from the
+  // rest state (scale 1), so body's client rect maps it to local coords.
+  window.__apCameraZoom = (fx, fy, dx, dy, s, ms) => {
+    const b = document.body; if (!b) return;
+    const r = b.getBoundingClientRect();
+    b.style.transformOrigin = (fx - r.left) + 'px ' + (fy - r.top) + 'px';
+    b.style.transition = 'transform ' + ms + 'ms cubic-bezier(.22,1,.36,1)';
+    b.style.transform = 'translate(' + dx + 'px,' + dy + 'px) scale(' + s + ')';
+    window.__apZoomCursor && window.__apZoomCursor(s, ms);
+  };
+  window.__apCameraReset = (ms) => {
+    const b = document.body; if (!b) return;
+    b.style.transition = 'transform ' + ms + 'ms cubic-bezier(.4,0,.2,1)';
+    b.style.transform = 'none';
+    window.__apZoomCursor && window.__apZoomCursor(1, ms);
+  };
+})()`;
+
+// Camera keyframe for a zoom of `scale` focused on `focus` (viewport px).
+// Scaling around the focus point never reveals past the content's edges; the
+// translate then re-centers the focus toward mid-viewport, clamped per side by
+// (scale-1) * distance(focus, that edge) — exactly how far that edge moved
+// off-screen — so no out-of-content gap can ever appear. recenter:false keeps
+// the focus point exactly where it was (needed to preserve a live :hover — the
+// real pointer doesn't move, so the content under it must not either).
+export function cameraKeyframe(focus, scale, viewport = { width: 1280, height: 800 }, { recenter = true } = {}) {
+  const s = Math.max(1, scale);
+  const clampAxis = (want, lo, hi) => Math.max(-(s - 1) * hi, Math.min((s - 1) * lo, want));
+  return {
+    scale: s,
+    fx: focus.x,
+    fy: focus.y,
+    dx: recenter ? clampAxis(viewport.width / 2 - focus.x, focus.x, viewport.width - focus.x) : 0,
+    dy: recenter ? clampAxis(viewport.height / 2 - focus.y, focus.y, viewport.height - focus.y) : 0,
+  };
+}
+
+// Where a rest-state (scale 1) viewport point lands on screen under a camera
+// keyframe — used to glide the cursor sprite (which sits outside the zoomed
+// subtree) along with the content it was pointing at.
+export function cameraMapPoint(p, k) {
+  return { x: k.fx + (p.x - k.fx) * k.scale + k.dx, y: k.fy + (p.y - k.fy) * k.scale + k.dy };
+}
+
+// Punch-in scale: the acted element plus breathing room fills the frame, kept
+// in a tasteful range so it never gets extreme.
+export function zoomScaleForBox(box, vw = 1280, vh = 800) {
+  if (!box) return 1.8;
+  const s = Math.min(vw / (box.width + 420), vh / (box.height + 320));
+  return Math.max(1.35, Math.min(2, s));
+}
+
+export async function cameraZoomIn(page, k, { cursor = null, ms = 750 } = {}) {
+  await page.evaluate(CAMERA_JS);
+  await page.evaluate(([fx, fy, dx, dy, s, m]) => window.__apCameraZoom(fx, fy, dx, dy, s, m), [k.fx, k.fy, k.dx, k.dy, k.scale, ms]);
+  if (cursor) {
+    const p = cameraMapPoint(cursor, k);
+    await page.evaluate(([x, y, m]) => window.__apGlideCursor && window.__apGlideCursor(x, y, m), [p.x, p.y, ms]).catch(() => {});
+  }
+  await sleep(ms + 150); // let the ease settle
+}
+
+export async function cameraReset(page, { cursor = null, ms = 850 } = {}) {
+  await page.evaluate((m) => window.__apCameraReset && window.__apCameraReset(m), ms).catch(() => {});
+  if (cursor) {
+    await page.evaluate(([x, y, m]) => window.__apGlideCursor && window.__apGlideCursor(x, y, m), [cursor.x, cursor.y, ms]).catch(() => {});
+  }
+  await sleep(ms + 150);
 }
 
 // Like snapshotInteractives, but also offers structural "draggable candidates"
@@ -1114,7 +1209,7 @@ export function ffmpegToMp4(inPath, outPath, startSec, endSec) {
 // miss the final frame can't confirm, or any error — so the caller falls back
 // to the still-image pipeline for this change.
 async function recordInteractionVideo(browser, baseUrl, change, shared, tag) {
-  const { commitMessage, interactionHints } = shared;
+  const { commitMessage, interactionHints, zoomCamera } = shared;
   const clause = change.clause;
   const interactionHint = typeof change.interaction_hint === 'string' ? change.interaction_hint.trim() : '';
   const candidates = (Array.isArray(change.candidate_paths) && change.candidate_paths.length ? change.candidate_paths : ['/'])
@@ -1206,6 +1301,7 @@ Return ONLY JSON:
 
       const isCapture = decision.is_capture === true;
       if (isCapture && captureStart === null) captureStart = elapsed();
+      let cursorAt = null; // where the synthetic cursor ends up, for the camera
       try {
         if (decision.action === 'drag') {
           const from = boxCenter(await src.boundingBox());
@@ -1217,11 +1313,13 @@ Return ONLY JSON:
           }
           if (!to) to = { x: from.x, y: from.y + (Number.isFinite(decision.dy) && decision.dy ? decision.dy : 140) };
           await apDrag(page, from, to);
+          cursorAt = to;
         } else if (decision.action === 'hover') {
           const b = boxCenter(await src.boundingBox());
           if (b) await apMove(page, b.x, b.y);
           await src.hover({ timeout: 8000 });
           await sleep(700);
+          cursorAt = b;
         } else if (decision.action === 'select') {
           await src.selectOption(decision.value ?? '', { timeout: 8000 });
           await sleep(600);
@@ -1230,11 +1328,13 @@ Return ONLY JSON:
           if (b) { await apMove(page, b.x, b.y); await sleep(120); }
           await typeIntoField(page, src, decision.value); // focuses + fills, no submit; handles combobox wrappers
           await sleep(600);
+          cursorAt = b;
         } else {
           const b = boxCenter(await src.boundingBox());
           if (b) { await apMove(page, b.x, b.y); await sleep(150); }
           await src.click({ timeout: 8000 });
           await sleep(600);
+          cursorAt = b;
         }
         history.push(`${decision.action} "${picked.name}"${decision.action === 'type' ? ` = "${decision.value ?? ''}"` : ''}`);
         console.log(`Recorder step ${step}: ${decision.action} "${picked.name}"${isCapture ? ' [capture]' : ''} — ${decision.reason ?? ''}`);
@@ -1242,6 +1342,30 @@ Return ONLY JSON:
       } catch (err) {
         console.warn(`Recorder action failed (${err.message}); stopping.`);
         break;
+      }
+
+      // Cinematic camera on the showcase step: the interaction ran at 1x with
+      // the page completely untouched (acting while CSS-scaled breaks drag
+      // libraries and rect-positioned popovers) — now ease-zoom into where it
+      // happened, hold on the result, ease back out. Presentational only:
+      // any trouble resets the camera and the clip is simply un-zoomed.
+      if (isCapture && zoomCamera) {
+        try {
+          const box = await src.boundingBox().catch(() => null); // re-measured: the element in its post-action state/slot
+          const focus = boxCenter(box) || cursorAt;
+          if (focus) {
+            // A hover reveal only survives if the point under the real (unmoved)
+            // pointer stays put — zoom around it and skip the re-centering.
+            const k = cameraKeyframe(focus, zoomScaleForBox(box), undefined, { recenter: decision.action !== 'hover' });
+            await cameraZoomIn(page, k, { cursor: cursorAt });
+            await sleep(1300);
+            await cameraReset(page, { cursor: cursorAt });
+            console.log(`Recorder: camera punch-in at ${k.scale.toFixed(2)}x.`);
+          }
+        } catch (err) {
+          console.warn(`Recorder: zoom camera failed (${err.message}); clip stays un-zoomed.`);
+          await cameraReset(page, { ms: 250 }).catch(() => {});
+        }
       }
       if (isCapture) captureEnd = elapsed();
     }
@@ -1412,6 +1536,11 @@ async function main() {
   // Also requires interactive shots (both drive the page). Its own kill-switch
   // so video can be disabled without turning off the validated interactive stills.
   const INTERACTION_VIDEOS = envBool('INTERACTION_VIDEOS', config.interactionVideos ?? true);
+
+  // Zoom camera: FocuSee-style ease-zoom in/out around the showcase
+  // interaction in recorded clips (on by default). Purely presentational —
+  // off, recordings behave exactly as before.
+  const ZOOM_CAMERA = envBool('ZOOM_CAMERA', config.zoomCamera ?? true);
 
   // A push can bundle several distinct changes (one feature at a time is the
   // common case and still gets exactly one image); this caps how many get
@@ -1685,6 +1814,7 @@ ${wantRoutes ? `      "candidate_paths": string[],  // 1 to 3 URL paths most lik
           commitMessage,
           interactiveShots: INTERACTIVE_SHOTS,
           interactionHints,
+          zoomCamera: ZOOM_CAMERA,
           browseMaxSteps: changes.length > 1 ? 3 : 5,
           browseWallClockMs: changes.length > 1 ? 45_000 : 90_000,
         };

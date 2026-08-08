@@ -129,6 +129,10 @@ jobs:
           # (present on GitHub-hosted runners) + interactive shots. Set repo
           # variable INTERACTION_VIDEOS=false to always post stills.
           INTERACTION_VIDEOS: ${{ vars.INTERACTION_VIDEOS }}
+          # Recorded clips get a cinematic zoom camera (ease-zoom into the
+          # showcase interaction, hold, ease back out). On by default; set repo
+          # variable ZOOM_CAMERA=false for flat recordings.
+          ZOOM_CAMERA: ${{ vars.ZOOM_CAMERA }}
           # A push can bundle several distinct changes; this caps how many get
           # their own image/line in the post (1-4, hard-capped at 4 — X's own
           # limit). Set repo variable MAX_BUNDLE_IMAGES to override the default.
