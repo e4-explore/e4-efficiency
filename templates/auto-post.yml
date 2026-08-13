@@ -144,6 +144,15 @@ jobs:
           X_API_SECRET: ${{ secrets.X_API_SECRET }}
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          # Optional scheduling queue: when a merge lands outside the
+          # audience-active windows (windows.json) and both of these are set,
+          # the ready-to-post update is deferred to the post-scorer-api Worker
+          # and fired at the next active window. Unset either and deferral
+          # degrades to posting immediately (safe if you haven't wired the
+          # queue). WORKER_URL = the deployed Worker base URL; the token must
+          # match the Worker's ENQUEUE_TOKEN secret.
+          WORKER_URL: ${{ vars.WORKER_URL }}
+          WORKER_ENQUEUE_TOKEN: ${{ secrets.WORKER_ENQUEUE_TOKEN }}
         run: node post.mjs
 
       # Dry-run only: GITHUB_STEP_SUMMARY is text-only, so the chosen image(s)
