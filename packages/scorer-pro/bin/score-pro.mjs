@@ -27,13 +27,26 @@ function parseArgs(argv) {
 }
 
 function geminiAdapter(key) {
-  const models = [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.5-flash-lite'].filter(Boolean);
+  // Try GEMINI_MODEL first if set, then fall through a list of currently
+  // generate-capable models (cheap → more capable). Google rotates model
+  // availability and some ids 404 for newer accounts even while they still
+  // appear in the models.list endpoint, so this list is verified against
+  // :generateContent, not the catalog. The loop below skips any that 404, so
+  // a stale entry degrades instead of breaking — but keep this list current.
+  const models = [process.env.GEMINI_MODEL, 'gemini-2.5-flash', 'gemini-flash-lite-latest', 'gemini-3.5-flash'].filter(Boolean);
   return async (prompt) => {
     let lastErr = '';
     for (const model of models) {
       const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.6, maxOutputTokens: 2048 } }) },
+        // maxOutputTokens must cover the model's hidden "thinking" tokens PLUS
+        // the JSON payload. At 2048 the 2.5/3.x thinking models intermittently
+        // spend the whole budget reasoning and return truncated (finishReason
+        // MAX_TOKENS) or empty text, which surfaced here as "Unbalanced JSON
+        // object in model reply" / silent fallback to heuristics-only. 8192
+        // gives enough headroom to finish thinking and still emit the object.
+        // (Not using thinkingConfig:{thinkingBudget:0} — some models 400 on it.)
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.6, maxOutputTokens: 8192 } }) },
       );
       if (!res.ok) { lastErr = `${res.status} ${await res.text()}`; continue; }
       const body = await res.json();
