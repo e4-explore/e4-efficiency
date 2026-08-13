@@ -176,6 +176,10 @@ line — same statement rules, no connective words between them.
   on the result, and ease back out — cinematic FocuSee-style framing with the
   cursor riding along, live in the page and pixel-sharp. On by default
   (`zoom-camera`); purely presentational, degrades to a flat clip on trouble
+- ✅ Scripted flows: a repo can define product flows in natural language
+  (`config.json` `flows`); when a matching interaction change lands, Gemini
+  walks the steps and a click-following camera zooms on each click, pans to the
+  next, and punches in on the result. Falls back to the autonomous recorder
 - ✅ Vision verification: a shot that doesn't visibly show the change triggers
   a widened route search over the repo's page files before falling back
 - ✅ Bundled changes: a push with a few distinct, separately-noticeable

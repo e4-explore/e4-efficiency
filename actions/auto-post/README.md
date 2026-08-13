@@ -104,6 +104,46 @@ of parent order.
 - `.github/auto-post/history.jsonl` — written by the action and committed back;
   the caller's `paths-ignore` keeps that commit from retriggering the workflow.
 
+### Scripted flows (optional)
+
+`config.json` may include a `flows` array — owner-defined **product flows in
+natural language**. When a merge's change is an interaction (`capture: "video"`)
+and matches a flow, the poster records that whole flow instead of guessing one
+interaction: **Gemini performs each step** (finds the control, does the action)
+and a **click-following camera** zooms on every click and pans to the next,
+then punches in on the result.
+
+```json
+{
+  "flows": [
+    {
+      "name": "score a post",
+      "match": { "navTarget": "scorer", "paths": ["src/scorer/**"] },
+      "url": "/",
+      "steps": [
+        "type a short, punchy sample X post into the draft field",
+        "click the media tab",
+        "choose the video option",
+        "press enter to score it"
+      ],
+      "payoff": "the score result"
+    }
+  ]
+}
+```
+
+- `match` — a flow fires for a video change whose detected component/screen
+  contains `navTarget` (case-insensitive substring) **or** whose changed files
+  match any `paths` glob. A flow with no `match` runs only when it's the sole
+  flow defined.
+- `steps` — natural-language instructions, one action each (`type`, click,
+  `select`, `hover`, `press enter`). Safety-gated: a step can never trigger a
+  destructive/financial/send control.
+- `url` — start path (default `/`). `payoff` — optional text describing the
+  result to punch in on at the end.
+- Fail-open: no flow, no match, or any trouble → the autonomous recorder (then a
+  still). `zoom-camera: false` records flows flat.
+
 ## Deploy-gate
 
 If `deploy-gate-health-url` is set, the action waits (on push only) until that
