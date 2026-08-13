@@ -34,7 +34,10 @@ function geminiAdapter(key) {
   // :generateContent, not the catalog. The loop below skips any that 404, so
   // a stale entry degrades instead of breaking — but keep this list current.
   const models = [process.env.GEMINI_MODEL, 'gemini-2.5-flash', 'gemini-flash-lite-latest', 'gemini-3.5-flash'].filter(Boolean);
-  return async (prompt) => {
+  // Per-call `temperature`: the scoring pass asks for a cool value (reproducible
+  // grades) and the rewrite pass a warm one (varied drafts). Default 0.6 for any
+  // direct caller that doesn't specify.
+  return async (prompt, { temperature = 0.6 } = {}) => {
     let lastErr = '';
     for (const model of models) {
       const res = await fetch(
@@ -46,7 +49,7 @@ function geminiAdapter(key) {
         // object in model reply" / silent fallback to heuristics-only. 8192
         // gives enough headroom to finish thinking and still emit the object.
         // (Not using thinkingConfig:{thinkingBudget:0} — some models 400 on it.)
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.6, maxOutputTokens: 8192 } }) },
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature, maxOutputTokens: 8192 } }) },
       );
       if (!res.ok) { lastErr = `${res.status} ${await res.text()}`; continue; }
       const body = await res.json();

@@ -13,6 +13,14 @@ const clamp01 = (n) => Math.max(0, Math.min(1, Number(n) || 0));
 // a stabilizer, so the LLM leads but can't run away on its own.
 const LLM_WEIGHT = 0.7;
 
+// Scoring must be reproducible: the same post should get the same grade every
+// time, or the grader looks random. So the scoring call runs near-deterministic.
+// (Rewriting is the opposite — it wants variety across attempts; see
+// REWRITE_TEMPERATURE in optimize.mjs.) Adapters that honor a per-call
+// `temperature` option (the bundled Gemini/Anthropic/OpenAI ones do) use this;
+// any that ignore it simply keep their own default.
+const SCORING_TEMPERATURE = 0.1;
+
 function buildPrompt(features) {
   return `You are modeling how X's (Twitter's) current Grok/Phoenix recommendation model would treat this post. It predicts a probability for each action, then sums them times the ACTUAL published production weights (xai-org/x-algorithm param.rs). Those weights, from most to least valuable:
 - share-via-copy-link ${ACTION_WEIGHTS.shareViaCopyLink} (the single biggest positive) — someone copies the link to send it
@@ -72,7 +80,7 @@ export async function predict(features, llm) {
   if (!llm) return { probs: prior, notes: {}, source: 'features' };
 
   try {
-    const reply = await llm(buildPrompt(features));
+    const reply = await llm(buildPrompt(features), { temperature: SCORING_TEMPERATURE });
     const rawProbs = reply?.probabilities || {};
     const llmProbs = {};
     for (const k of Object.keys(prior)) if (rawProbs[k] != null) llmProbs[k] = clamp01(rawProbs[k]);

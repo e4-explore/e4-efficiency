@@ -12,16 +12,18 @@
 // Wrap the auto-poster's gemini(parts, opts) — which takes an array of
 // { text } parts and returns parsed JSON — into the (prompt) => object shape.
 export function fromGeminiFn(geminiFn, opts = {}) {
-  return async (prompt) => geminiFn([{ text: prompt }], opts);
+  // A per-call temperature (scoring vs rewriting) overrides the adapter default.
+  return async (prompt, callOpts = {}) => geminiFn([{ text: prompt }], { ...opts, ...callOpts });
 }
 
 // Wrap an Anthropic Messages-style client. `create` should be a function like
 // anthropic.messages.create; we ask for JSON and parse the first text block.
 export function fromAnthropic(create, { model = 'claude-opus-4-8', maxTokens = 1024 } = {}) {
-  return async (prompt) => {
+  return async (prompt, { temperature } = {}) => {
     const res = await create({
       model,
       max_tokens: maxTokens,
+      ...(temperature != null ? { temperature } : {}),
       messages: [{ role: 'user', content: `${prompt}\n\nReturn ONLY minified JSON.` }],
     });
     const text = res?.content?.find?.((b) => b.type === 'text')?.text ?? res?.content?.[0]?.text ?? '';
@@ -31,10 +33,11 @@ export function fromAnthropic(create, { model = 'claude-opus-4-8', maxTokens = 1
 
 // Wrap an OpenAI/Grok-compatible chat.completions.create.
 export function fromOpenAICompatible(create, { model = 'grok-2-latest', maxTokens = 1024 } = {}) {
-  return async (prompt) => {
+  return async (prompt, { temperature } = {}) => {
     const res = await create({
       model,
       max_tokens: maxTokens,
+      ...(temperature != null ? { temperature } : {}),
       response_format: { type: 'json_object' },
       messages: [{ role: 'user', content: prompt }],
     });

@@ -8,6 +8,13 @@
 
 const clampText = (t) => String(t ?? '').trim();
 
+// Rewriting wants creative variety across attempts — a warmer temperature than
+// the near-deterministic scoring pass (predict.mjs SCORING_TEMPERATURE). Sharing
+// one temperature made scoring noisy, which drowned out real gains and stalled
+// the loop; splitting them lets scoring stay reproducible while rewrites explore.
+// Adapters that honor a per-call `temperature` use this; others keep their own.
+const REWRITE_TEMPERATURE = 0.75;
+
 function rewritePrompt(current, evaluation, constraints) {
   const top = evaluation.suggestions.slice(0, 4).map((s, i) => `${i + 1}. ${s.text}`).join('\n');
   return `You are optimizing a social post for maximum reach and engagement on X, WITHOUT changing what it's about or breaking the rules below.
@@ -69,7 +76,7 @@ export async function optimizePost(input, {
 
     let rewritten;
     try {
-      const reply = await llm(rewritePrompt(best.text, best.evaluation, constraints));
+      const reply = await llm(rewritePrompt(best.text, best.evaluation, constraints), { temperature: REWRITE_TEMPERATURE });
       rewritten = clampText(reply?.post_text);
     } catch (err) {
       reason = `rewrite-error: ${err?.message || err}`;

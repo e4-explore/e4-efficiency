@@ -48,6 +48,27 @@ test('optimizePost iterates higher when licensed', async () => {
   assert.ok(r.best.text.length > 0);
 });
 
+test('scoring runs cooler than rewriting (split temperature)', async () => {
+  const seen = { score: null, rewrite: null };
+  const recordingLlm = async (prompt, opts = {}) => {
+    if (/Rewrite the post/.test(prompt)) {
+      seen.rewrite = opts.temperature;
+      return { post_text: 'cut signup from 3 minutes to 30 seconds. what is the slowest step in yours?', rationale: 'tighter' };
+    }
+    seen.score = opts.temperature;
+    return { probabilities: { like: 0.2, reply: 0.12, replyEngagedByAuthor: 0.06 }, hookStrength: 0.8, clarity: 0.8, critique: 'c', suggestions: ['s'] };
+  };
+  await optimizePost(
+    { text: 'we updated the onboarding flow to make it faster', hasMedia: true, mediaType: 'image' },
+    // targetScore above the 0-100 range so a rewrite attempt always fires,
+    // independent of what the stub happens to score under the current weights.
+    { llm: recordingLlm, licenseKey: DEV_LICENSE, targetScore: 101, maxIterations: 1 },
+  );
+  assert.equal(typeof seen.score, 'number', 'scoring call received a temperature');
+  assert.equal(typeof seen.rewrite, 'number', 'rewrite call received a temperature');
+  assert.ok(seen.score < seen.rewrite, `scoring temp ${seen.score} should be < rewrite temp ${seen.rewrite}`);
+});
+
 test('optimizePost throws UNLICENSED without a key', async () => {
   delete process.env.POST_SCORER_LICENSE_KEY;
   await assert.rejects(() => optimizePost('draft', { llm: stubLlm }), (e) => e.code === 'UNLICENSED');
