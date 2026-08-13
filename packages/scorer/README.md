@@ -17,24 +17,34 @@ which builds on this package and requires a license key.
 X's ranking is the **Grok/Phoenix transformer** (`xai-org/x-algorithm`, README
 updated 2026-08-13): action heads predict P(action) per candidate; a Weighted
 Scorer sums them (`Final Score = Σ wᵢ·P(actionᵢ)`) to sort the feed — no public
-denominator, it's a *relative* number. Two hard limits: the trained model
-weights aren't downloadable, and the Weighted Scorer's numeric weights are
-**redacted**. So nobody outside X can compute a real score.
+denominator, it's a *relative* number. The **actual production weights are now
+published** in `home-mixer/params/param.rs` (Apache-2.0, synced 2026-08-12), so
+we encode the real numbers, not guesses. The one thing still not downloadable is
+the trained transformer itself, so we estimate each `P(action)` from the post
+and apply the real weights.
 
-What *is* public is the (rich) action set and the consistent directional
-analyses — **reply ≈ 27× a like**, author back-and-forth strongest, **bookmarks
-(saves) a top "lasting value" signal**, shares/follows/dwell above likes,
-media-click intent (photo-expand, video-open) and quote as their own positives,
-report/block/mute/"not dwelled" negative, external links limit reach,
-originality favored. After the sum, documented post-ranker **adjustments**
-reshape the order — author-diversity decay, an **out-of-network discount** (most
-reach for a small account is non-followers, which is discounted, so per-reader
-saves/replies/dwell matter more than likes), a new-author boost, and a VMRanker
-diversity rerank — and, separately, **visibility filtering** can suppress a post
-regardless of rank. We encode the per-post directions as tunable weights and
-estimate each action's probability from the post; the feed-context adjustments
-are surfaced as strategy notes (`postingStrategyNotes()`), not folded into the
-number. **Treat the number as a relative guide; the subscores and (in Pro) the
+The weights that matter (all from `param.rs`):
+
+- **Copy-link share `+20`** and **a reply on your original from a mutual `+20`**
+  (`reply 5` + `bidiFollowReplyBoost 15`) are the two biggest positives.
+- **Quote / reply / share-via-DM `+5`**, **follow-from-post `+4`**, share-button
+  `+2`, repost `+1`.
+- A **like is only `+0.5`**, a post-click `+0.4`, a link-open `+0.2`.
+- **Profile-click `0` and yes/no dwell `0`** — literally worth nothing. Continuous
+  dwell time is `+0.004` (nearly nothing). Photo-expand / video-open /
+  quality-view are `+0.05` each.
+- **Negatives dwarf everything: report `−234`, mute `−58.8` (worse than block!),
+  not-interested `−43.2`, block `−31.2`.** One predicted report ≈ 468 likes of
+  damage, so avoiding negative feedback is the highest-leverage lever.
+
+After the sum, real post-ranker **adjustments** reshape the order —
+author-diversity decay (`0.5`, floor `0.25`), an **out-of-network discount**
+(`×0.75`, which also taxes replies/reposts even for followers), a small-account
+lift, and a **VMRanker** diversity rerank (`θ=0.65`) — and, separately,
+**visibility filtering** ("Do Not Amplify", NSFW, spam labels) can drop a post
+regardless of rank. These depend on feed/account context, so they're surfaced as
+strategy notes (`postingStrategyNotes()`), not folded into the per-post number.
+**Treat the number as a relative guide; the subscores and (in Pro) the
 suggestions are the real product.**
 
 ## Run

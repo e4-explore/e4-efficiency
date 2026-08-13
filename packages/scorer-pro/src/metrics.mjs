@@ -113,8 +113,8 @@ export function parseAnalyticsCsv(csvText) {
 }
 
 // Map raw metrics -> per-action rates (count / impressions), then to the actual
-// engagement score with the scorer's own weights. Shares fall back to bookmarks
-// (both are "save/forward" intent) when a shares column isn't present.
+// engagement score with the scorer's own (real, published) weights, so the
+// measured score and the predicted score share one 0–100 scale.
 export function actualScore(metrics) {
   const impr = metrics.impressions > 0 ? metrics.impressions : null;
   if (!impr) return { score: null, engagementRate: null, reason: 'no-impressions' };
@@ -123,12 +123,15 @@ export function actualScore(metrics) {
     like: metrics.likes / impr,
     retweet: metrics.reposts / impr,
     reply: metrics.replies / impr,
-    share: (metrics.shares || metrics.bookmarks) / impr,
-    follow: metrics.follows / impr,
-    profileClickAndEngage: metrics.profileClicks / impr,
-    openAndDwell: (metrics.detailExpands || metrics.urlClicks) / impr,
-    videoWatch50: metrics.mediaViews / impr,
-    // negativeFeedback isn't in the export; treated as 0.
+    quote: metrics.quotes / impr,
+    share: metrics.shares / impr, // share-button (weight 2.0)
+    followAuthor: metrics.follows / impr,
+    profileClick: metrics.profileClicks / impr, // weight 0 in the real model
+    click: metrics.detailExpands / impr, // post/detail clicks (weight 0.4)
+    openLink: metrics.urlClicks / impr, // link opens (weight 0.2)
+    vqv: metrics.mediaViews / impr, // video quality views (weight 0.05)
+    // Bookmarks/saves and the negative-feedback actions aren't in the export;
+    // bookmarks aren't a scored action in the current formula, so both are 0.
   };
   let ev = 0;
   for (const [action, r] of Object.entries(rate)) ev += (ACTION_WEIGHTS[action] || 0) * r;

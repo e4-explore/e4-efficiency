@@ -14,19 +14,21 @@ const clamp01 = (n) => Math.max(0, Math.min(1, Number(n) || 0));
 const LLM_WEIGHT = 0.7;
 
 function buildPrompt(features) {
-  return `You are modeling how X's (Twitter's) current Grok/Phoenix recommendation model would treat this post.
-The model predicts a probability for each action, then sums them weighted. Relative weights (for context, weakest→strongest):
-- like ${ACTION_WEIGHTS.like}, photo-expand ${ACTION_WEIGHTS.photoExpand} / video-open ${ACTION_WEIGHTS.videoOpen} (a tap to look closer at the media), retweet ${ACTION_WEIGHTS.retweet}, quote ${ACTION_WEIGHTS.quote}, share ${ACTION_WEIGHTS.share} (esp. share-via-DM)
-- bookmark/save ${ACTION_WEIGHTS.bookmark} (a strong "lasting value" signal, second only to replies), follow ${ACTION_WEIGHTS.follow}
-- open + dwell ${ACTION_WEIGHTS.openAndDwell}, profile click + engage ${ACTION_WEIGHTS.profileClickAndEngage}, reply ${ACTION_WEIGHTS.reply} (~27× a like)
-- the author replying back into a reply ${ACTION_WEIGHTS.replyEngagedByAuthor} (by far the strongest positive)
-- negative feedback (report/block/mute/"not interested"/scrolled past without dwelling) ${ACTION_WEIGHTS.negativeFeedback} (punishes hard)
+  return `You are modeling how X's (Twitter's) current Grok/Phoenix recommendation model would treat this post. It predicts a probability for each action, then sums them times the ACTUAL published production weights (xai-org/x-algorithm param.rs). Those weights, from most to least valuable:
+- share-via-copy-link ${ACTION_WEIGHTS.shareViaCopyLink} (the single biggest positive) — someone copies the link to send it
+- a reply on your ORIGINAL from a mutual follower = reply ${ACTION_WEIGHTS.reply} + a ${ACTION_WEIGHTS.bidiFollowReplyBoost} boost = 20 (tied for biggest). Originals only; your own replies don't get the boost
+- quote ${ACTION_WEIGHTS.quote}, any reply ${ACTION_WEIGHTS.reply}, share-via-DM ${ACTION_WEIGHTS.shareViaDm}
+- follow-from-post ${ACTION_WEIGHTS.followAuthor}, share-button ${ACTION_WEIGHTS.share}, repost ${ACTION_WEIGHTS.retweet}
+- like ${ACTION_WEIGHTS.like}, post-click ${ACTION_WEIGHTS.click}, link-open ${ACTION_WEIGHTS.openLink}
+- photo-expand / video-open / quality-video-view / quoted-click ${ACTION_WEIGHTS.photoExpand} each (tiny)
+- continuous dwell time ${ACTION_WEIGHTS.contDwellTime} (nearly nothing). Yes/no dwell ${ACTION_WEIGHTS.dwell} and profile-click ${ACTION_WEIGHTS.profileClick} are literally worth ZERO
+NEGATIVES dwarf everything: report ${ACTION_WEIGHTS.report}, mute ${ACTION_WEIGHTS.muteAuthor} (worse than block), not-interested ${ACTION_WEIGHTS.notInterested}, block ${ACTION_WEIGHTS.blockAuthor}, scrolled-past-without-dwelling ${ACTION_WEIGHTS.notDwelled}. One predicted report is ~468 likes of damage.
 
-Feed context that shapes what actually wins (not part of these per-action probabilities, but judge with it in mind):
-- Most reach for a small/creator account is OUT-OF-NETWORK, which X discounts. The signals that overcome that discount are replies, bookmarks (saves) and dwell — so reward posts a STRANGER with zero context would save or read twice, not just posts an existing fan would like.
-- Ranking and visibility are separate: even a high-scoring post can be suppressed by visibility filtering if it trips a safety/spam label. Misleading, inflammatory, or engagement-farming posts risk that regardless of engagement.
+Feed context that shapes what actually wins (judge with it in mind):
+- Most reach for a small/creator account is OUT-OF-NETWORK, taxed x0.75. The only things that beat that tax are ORIGINALS a STRANGER with zero context will reply to, quote, DM, or copy-link. Replies/reposts are taxed x0.75 even for followers, so they aren't a reach play. Likes, profile visits and time-on-post are almost decorative.
+- Ranking and visibility are separate machines: even a high-scoring post gets DROPPED from out-of-network recommendations if it trips a spam / "Do Not Amplify" / NSFW / misleading label. So spicy-but-risky loses to safe-but-substantive.
 
-Estimate, for a typical reader who sees this post, the PROBABILITY (0..1) of each action. Be calibrated: a like comes from a small fraction of viewers, bookmarks/replies are rarer, author-reply-exchanges rarer still, follows/shares/quotes rarest; photo-expand/video-open only apply when media is present. Judge the content on its merits — original, substantive posts that invite genuine back-and-forth or are worth saving score high; recycled/aggregated/low-effort or bland posts score low; spammy/misleading/inflammatory posts carry real negative-feedback and visibility risk. Hashtags barely matter now (the model reads meaning, not tags).
+Estimate, for a typical reader who sees this post, the PROBABILITY (0..1) of each action. Be calibrated: likes come from a small fraction of viewers; replies rarer; copy-link/DM/quote/follow rarest; the negatives are very rare but catastrophic when they fire. photo-expand/video-open/quality-view only apply with media (video quality view needs a ≥10s video). Reward original, substantive posts a stranger would forward or argue with; mark down bland/recycled/low-effort posts; flag real report/mute/block/not-interested risk for anything spammy, misleading, inflammatory, or engagement-farming.
 
 POST:
 """
@@ -37,10 +39,11 @@ Has media attached: ${features.hasMedia ? features.mediaType : 'no'}
 Return ONLY JSON:
 {
   "probabilities": {
-    "like": 0..1, "photoExpand": 0..1, "videoOpen": 0..1, "retweet": 0..1, "quote": 0..1,
-    "share": 0..1, "bookmark": 0..1, "follow": 0..1, "reply": 0..1,
-    "replyEngagedByAuthor": 0..1, "profileClickAndEngage": 0..1,
-    "openAndDwell": 0..1, "videoWatch50": 0..1, "negativeFeedback": 0..1
+    "like": 0..1, "click": 0..1, "openLink": 0..1, "retweet": 0..1, "quote": 0..1,
+    "reply": 0..1, "shareViaDm": 0..1, "share": 0..1, "shareViaCopyLink": 0..1,
+    "followAuthor": 0..1, "bidiFollowReplyBoost": 0..1, "photoExpand": 0..1,
+    "videoOpen": 0..1, "vqv": 0..1, "contDwellTime": 0..1,
+    "report": 0..1, "muteAuthor": 0..1, "notInterested": 0..1, "blockAuthor": 0..1, "notDwelled": 0..1
   },
   "hookStrength": 0..1,   // does the first line stop the scroll?
   "clarity": 0..1,        // is the one idea instantly clear?
