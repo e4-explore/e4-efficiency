@@ -2437,8 +2437,12 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
       } catch (err) {
         console.warn('Scheduler: windows.json unreadable, posting now.', err.message);
       }
+      // Author-diversity spacing: feed the scheduler the last post's time so it
+      // can hold a new post far enough from the previous one (posts clustered in
+      // the same reader's feed decay each other). Newest history entry wins.
+      const lastPostAt = [...history].reverse().find((h) => h && h.posted_at)?.posted_at || null;
       const decision = scheduleConfig
-        ? decideSchedule(new Date(), scheduleConfig)
+        ? decideSchedule(new Date(), { ...scheduleConfig, lastPostAt })
         : { action: 'post-now', reason: 'no schedule config', window: null };
       console.log(`Scheduler: ${decision.action} — ${decision.reason}`);
 
