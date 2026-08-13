@@ -3,6 +3,7 @@
   "timezone": "America/New_York",
   "minRemainingMinutes": 35,
   "maxDeferHours": 8,
+  "minSpacingMinutes": 180,
   "windows": [
     { "day": "tue", "start": "11:00", "end": "12:00" },
     { "day": "tue", "start": "22:00", "end": "23:00" },

@@ -10,7 +10,7 @@ const DEV_LICENSE = 'v1.eyJzdWIiOiJlNC1leHBsb3JlLW93bmVyIiwicGxhbiI6InBybyIsImlh
 // Stub LLM (no network): predicts probabilities + notes, and rewrites on demand.
 const stubLlm = async (prompt) => {
   if (/Rewrite the post/.test(prompt)) return { post_text: 'cut onboarding from 3 minutes to 30 seconds. what is the slowest step in your own signup?', rationale: 'tighter' };
-  return { probabilities: { like: 0.28, reply: 0.16, replyEngagedByAuthor: 0.08, share: 0.03, follow: 0.02, openAndDwell: 0.16, negativeFeedback: 0.01 }, hookStrength: 0.85, clarity: 0.85, critique: 'lead with the number', suggestions: ['open with the concrete metric'] };
+  return { probabilities: { like: 0.28, reply: 0.16, quote: 0.05, shareViaCopyLink: 0.04, shareViaDm: 0.03, followAuthor: 0.02, click: 0.16, bidiFollowReplyBoost: 0.03, report: 0.001 }, hookStrength: 0.85, clarity: 0.85, critique: 'lead with the number', suggestions: ['open with the concrete metric'] };
 };
 
 test('the embedded dev license verifies', () => {

@@ -121,3 +121,42 @@ test('empty windows array falls back to post-now', () => {
   const r = decide(new Date(), { ...CONFIG, windows: [] });
   assert.equal(r.action, 'post-now');
 });
+
+// ---- author-diversity spacing (minSpacingMinutes + lastPostAt) ----
+
+// Tue 11:05 ET would post-now, but the last post was only 65 min ago and spacing
+// is 180 min → hold until the spacing floor (14:00Z + 180min = 17:00Z).
+test('spacing: recent last post holds a would-be post-now', () => {
+  const now = new Date('2026-08-11T15:05:00Z'); // Tue 11:05 ET, inside a window
+  const r = decide(now, { ...CONFIG, minSpacingMinutes: 180, lastPostAt: '2026-08-11T14:00:00Z' });
+  assert.equal(r.action, 'defer');
+  assert.equal(new Date(r.runAt).toISOString(), '2026-08-11T17:00:00.000Z');
+  assert.match(r.reason, /spacing/i);
+  assert.equal(r.spacedFromLastPost, '2026-08-11T14:00:00Z');
+});
+
+// Same instant, but the last post was 5h ago (> 180 min) → spacing satisfied,
+// behaves exactly like the base in-window post-now.
+test('spacing: an old-enough last post does not change the decision', () => {
+  const now = new Date('2026-08-11T15:05:00Z');
+  const r = decide(now, { ...CONFIG, minSpacingMinutes: 180, lastPostAt: '2026-08-11T10:00:00Z' });
+  assert.equal(r.action, 'post-now');
+  assert.match(r.reason, /In active window/);
+});
+
+// minSpacingMinutes set but no lastPostAt (first ever post) → no-op.
+test('spacing: no lastPostAt is a no-op', () => {
+  const now = new Date('2026-08-11T15:05:00Z');
+  const r = decide(now, { ...CONFIG, minSpacingMinutes: 180 });
+  assert.equal(r.action, 'post-now');
+  assert.match(r.reason, /In active window/);
+});
+
+// Spacing floor further out than maxDeferHours → keep the base decision rather
+// than let the post go stale, with a note that spacing was overridden.
+test('spacing: floor beyond maxDeferHours keeps the base decision', () => {
+  const now = new Date('2026-08-11T15:05:00Z'); // in-window post-now
+  const r = decide(now, { ...CONFIG, minSpacingMinutes: 600, lastPostAt: '2026-08-11T15:00:00Z' });
+  assert.equal(r.action, 'post-now');
+  assert.match(r.reason, /exceeds maxDeferHours/);
+});

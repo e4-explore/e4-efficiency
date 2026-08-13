@@ -15,7 +15,7 @@ const LEVER_TEXT = {
   'length-thin': 'Too thin to say much. Add the specific detail or the "why it matters" so there\'s something to engage with.',
   'length-crammed': "Getting crammed near the limit. Cut anything that isn't the one idea.",
   'length-over': (i) => `Over the 280-char limit${i.overBy ? ` by ${i.overBy}` : ''}. Tighten it or split into a thread.`,
-  'reply-bait': 'Give people a reason to reply — an open question or a take worth arguing with. Replies (and your reply back to them) are the highest-weighted signal by far.',
+  'reply-bait': 'Give a stranger a reason to reply, quote, or send this to a friend — an open question or a take worth arguing with. A reply is +5 (a reply on your original from a mutual is +20), a copy-link share is +20; a like is only +0.5, so write to be forwarded and replied to, not liked.',
 };
 
 function textFor(issue) {

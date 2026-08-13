@@ -88,7 +88,51 @@ function findNextWindow(now, config) {
   throw new Error('No active windows configured');
 }
 
+// Author-diversity spacing (documented in the scorer's SCORE_ADJUSTMENTS): your
+// 2nd post in the same reader's feed session is multiplied by ~0.625, the 3rd by
+// ~0.44. Firing posts close together mostly competes with yourself, so hold a new
+// post until at least `minSpacingMinutes` after the last one. Backward-compatible:
+// a no-op unless BOTH config.minSpacingMinutes (> 0) and config.lastPostAt are set.
+// When spacing bites, we re-run the window decision as if "now" were the earliest
+// allowed time, so the held post still lands in a real audience window.
+function applySpacing(decision, now, config) {
+  const { minSpacingMinutes, lastPostAt, maxDeferHours } = config;
+  if (!minSpacingMinutes || minSpacingMinutes <= 0 || !lastPostAt) return decision;
+  const lastMs = new Date(lastPostAt).getTime();
+  if (!Number.isFinite(lastMs)) return decision;
+
+  const earliestMs = lastMs + minSpacingMinutes * 60_000;
+  const decidedMs = decision.action === 'defer' ? new Date(decision.runAt).getTime() : now.getTime();
+  if (decidedMs >= earliestMs) return decision; // already spaced far enough out.
+
+  // Find when we could next post if "now" were the earliest-allowed instant, so
+  // the spaced post reuses the audience-window logic instead of landing at a bad
+  // wall-clock time. Guard against staleness via maxDeferHours.
+  const earliest = new Date(earliestMs);
+  const fromEarliest = decideByWindow(earliest, config);
+  const targetMs = fromEarliest.action === 'defer' ? new Date(fromEarliest.runAt).getTime() : earliestMs;
+  const hoursUntil = (targetMs - now.getTime()) / 3_600_000;
+  const heldMin = Math.round((earliestMs - now.getTime()) / 60_000);
+
+  if (hoursUntil <= maxDeferHours) {
+    return {
+      action: 'defer',
+      runAt: new Date(targetMs).toISOString(),
+      reason: `Author-diversity spacing: last post was under ${minSpacingMinutes} min ago, holding ~${heldMin} min so back-to-back posts don't compete in the same feed. ${fromEarliest.window ? `Lands in ${fromEarliest.window.day} ${fromEarliest.window.start}.` : 'No window nearby; posting at the spacing floor.'}`,
+      window: fromEarliest.window ?? null,
+      spacedFromLastPost: lastPostAt,
+    };
+  }
+  // Spacing floor is further out than we're willing to defer — accept the
+  // clustering rather than let the update go stale.
+  return { ...decision, reason: `${decision.reason} (author-diversity spacing wanted ${heldMin} more min but that exceeds maxDeferHours=${maxDeferHours}).` };
+}
+
 export function decide(now, config) {
+  return applySpacing(decideByWindow(now, config), now, config);
+}
+
+function decideByWindow(now, config) {
   const { timezone, minRemainingMinutes, maxDeferHours, windows } = config;
   if (!Array.isArray(windows) || windows.length === 0) {
     return { action: 'post-now', reason: 'No windows configured; scheduling disabled.', window: null };

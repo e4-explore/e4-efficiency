@@ -59,7 +59,10 @@ test('a reply-inviting post scores at least as high as a flat one', async () => 
 });
 
 test('negative-feedback probability drags net expected value down', () => {
-  const safe = expectedValue({ like: 0.2, reply: 0.05, negativeFeedback: 0 });
-  const risky = expectedValue({ like: 0.2, reply: 0.05, negativeFeedback: 0.1 });
+  // report is the heaviest published negative weight (−234).
+  const safe = expectedValue({ like: 0.2, reply: 0.05, report: 0 });
+  const risky = expectedValue({ like: 0.2, reply: 0.05, report: 0.01 });
   assert.ok(risky.net < safe.net);
+  // A 1% predicted report should swamp a healthy like+reply upside.
+  assert.ok(risky.net < 0);
 });
