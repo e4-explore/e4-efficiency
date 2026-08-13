@@ -46,7 +46,8 @@ import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, rea
 import { join, resolve, dirname, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+import { decide as decideSchedule } from './schedule.mjs';
 
 // ---------------------------------------------------------------- constants
 
@@ -1476,6 +1477,13 @@ async function main() {
     X_API_SECRET,
     X_ACCESS_TOKEN,
     X_ACCESS_TOKEN_SECRET,
+    // Scheduling queue (optional). When both are set, a `defer` decision
+    // enqueues the fully-prepared post (text + already-uploaded X media_ids)
+    // to the Worker for firing at run_at. When absent, `defer` degrades to
+    // an immediate post with a warning — safe for repos that haven't wired
+    // up the queue yet.
+    WORKER_URL,
+    WORKER_ENQUEUE_TOKEN,
   } = process.env;
 
   // Where config.json / cover.png / history.jsonl live (all in the CONSUMER
@@ -2061,6 +2069,84 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
         const mimeType = mediaTypes[k] === 'video' ? 'video/mp4' : 'image/png';
         mediaIds.push(await twitter.v1.uploadMedia(imagePaths[k], { mimeType }));
       }
+      // SCHEDULING (additive): the validated posting call itself is unchanged;
+      // this branch wraps around it. If the scheduler says defer AND the
+      // Worker queue is configured, hand off the ready-to-post payload
+      // (text + already-uploaded media_ids, both valid ~24h) and exit. If the
+      // Worker isn't configured, log the intent and fall through to post now —
+      // this keeps repos that haven't wired up the queue unbroken.
+      let scheduleConfig = null;
+      try {
+        const p = fileURLToPath(new URL('./windows.json', import.meta.url));
+        scheduleConfig = JSON.parse(readFileSync(p, 'utf8'));
+      } catch (err) {
+        console.warn('Scheduler: windows.json unreadable, posting now.', err.message);
+      }
+      const decision = scheduleConfig
+        ? decideSchedule(new Date(), scheduleConfig)
+        : { action: 'post-now', reason: 'no schedule config', window: null };
+      console.log(`Scheduler: ${decision.action} — ${decision.reason}`);
+
+      if (decision.action === 'defer' && WORKER_URL && WORKER_ENQUEUE_TOKEN) {
+        const res = await fetch(new URL('/api/v1/pending', WORKER_URL).href, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${WORKER_ENQUEUE_TOKEN}`,
+          },
+          body: JSON.stringify({
+            text: finalText,
+            media_ids: mediaIds,
+            run_at: decision.runAt,
+            sha: GITHUB_SHA,
+            repo: process.env.GITHUB_REPOSITORY,
+          }),
+        });
+        if (!res.ok) {
+          const body = await res.text().catch(() => '');
+          throw new Error(`Worker enqueue failed: ${res.status} ${body}`);
+        }
+        const { id } = await res.json();
+        console.log(`Enqueued for ${decision.runAt} (queue id: ${id}).`);
+
+        // Record now so future runs know this SHA is committed. `posted_at`
+        // reflects the scheduled fire time; downstream scoring should measure
+        // engagement velocity from actual post time, so it may want to check
+        // `deferred: true` and re-fetch post time later.
+        mkdirSync(dirname(HISTORY_PATH), { recursive: true });
+        appendFileSync(HISTORY_PATH, JSON.stringify({
+          sha: GITHUB_SHA,
+          tweet_id: null,
+          queue_id: id,
+          deferred: true,
+          text: finalText,
+          images: imageNotes,
+          posted_at: decision.runAt,
+          predicted: postPrediction,
+        }) + '\n');
+
+        const summary = process.env.GITHUB_STEP_SUMMARY;
+        if (summary) {
+          writeFileSync(
+            summary,
+            [
+              '### Auto-post deferred',
+              '',
+              `**Will tweet at ${decision.runAt}:** ${finalText}`,
+              imagesSummaryLine,
+              `**Reason:** ${decision.reason}`,
+              `**Queue id:** ${id}`,
+              '',
+            ].join('\n'),
+            { flag: 'a' },
+          );
+        }
+        return;
+      }
+      if (decision.action === 'defer') {
+        console.warn(`Scheduler wanted to defer but WORKER_URL/WORKER_ENQUEUE_TOKEN not set; posting now.`);
+      }
+
       // X rejects a `media` field with an empty media_ids array, so a text-only
       // post (no shot confirmed for any change) must omit `media` entirely.
       const tweet = mediaIds.length

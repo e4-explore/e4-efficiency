@@ -107,6 +107,14 @@ inputs:
     description: 'When "true", run the whole pipeline (draft + screenshot) but do NOT publish to X or write history. The drafted text and image are logged to the job summary. Use it to preview voice/screenshots before wiring to real merges.'
     required: false
     default: 'false'
+  worker-url:
+    description: 'Base URL of the deployed post-scorer-api Worker (e.g. https://post-scorer-api.your-account.workers.dev). When set together with worker-enqueue-token, posts that fall outside audience-active windows (per windows.json) are deferred to the queue and fired by the Worker cron. When unset, deferral degrades to an immediate post with a warning — safe for repos that haven''t wired up the queue.'
+    required: false
+    default: ''
+  worker-enqueue-token:
+    description: 'Shared secret matching the Worker''s ENQUEUE_TOKEN (stored via `wrangler secret put ENQUEUE_TOKEN`). Auths the POST /api/v1/pending call. Required to enable deferral.'
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -185,6 +193,8 @@ runs:
         X_API_SECRET: ${{ inputs.x-api-secret }}
         X_ACCESS_TOKEN: ${{ inputs.x-access-token }}
         X_ACCESS_TOKEN_SECRET: ${{ inputs.x-access-token-secret }}
+        WORKER_URL: ${{ inputs.worker-url }}
+        WORKER_ENQUEUE_TOKEN: ${{ inputs.worker-enqueue-token }}
       run: node "$GITHUB_ACTION_PATH/post.mjs"
 
     # Dry-run only: GITHUB_STEP_SUMMARY is text-only, so the chosen image(s)
