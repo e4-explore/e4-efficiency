@@ -21,4 +21,5 @@ export async function evaluate(input) {
 }
 
 export { extractFeatures } from './features.mjs';
-export { scorePost, featurePriors, reachMultiplier, lengthFactor, expectedValue } from './score.mjs';
+export { scorePost, featurePriors, reachMultiplier, lengthFactor, expectedValue, postingStrategyNotes } from './score.mjs';
+export { SCORE_ADJUSTMENTS } from './weights.mjs';

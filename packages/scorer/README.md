@@ -14,19 +14,28 @@ which builds on this package and requires a license key.
 
 ## Why the score means something (and its honest limits)
 
-X's ranking is now the Jan-2026 **Grok/Phoenix transformer** (`xai-org/x-algorithm`):
-~19 action heads predict P(action) per candidate; a Weighted Scorer sums them
-(`Final Score = Σ wᵢ·P(actionᵢ)`) to sort the feed — no public denominator, it's
-a *relative* number. Two hard limits: the trained model weights aren't
-downloadable, and the Weighted Scorer's numeric weights are **redacted**. So
-nobody outside X can compute a real score.
+X's ranking is the **Grok/Phoenix transformer** (`xai-org/x-algorithm`, README
+updated 2026-08-13): action heads predict P(action) per candidate; a Weighted
+Scorer sums them (`Final Score = Σ wᵢ·P(actionᵢ)`) to sort the feed — no public
+denominator, it's a *relative* number. Two hard limits: the trained model
+weights aren't downloadable, and the Weighted Scorer's numeric weights are
+**redacted**. So nobody outside X can compute a real score.
 
-What *is* public is the action set and the consistent directional analyses —
-**reply ≈ 27× a like**, author back-and-forth strongest, shares/follows/dwell
-above likes, report/block/mute heavily negative, external links limit reach,
-originality favored. We encode those directions as tunable weights and estimate
-each action's probability from the post. **Treat the number as a relative guide;
-the subscores and (in Pro) the suggestions are the real product.**
+What *is* public is the (rich) action set and the consistent directional
+analyses — **reply ≈ 27× a like**, author back-and-forth strongest, **bookmarks
+(saves) a top "lasting value" signal**, shares/follows/dwell above likes,
+media-click intent (photo-expand, video-open) and quote as their own positives,
+report/block/mute/"not dwelled" negative, external links limit reach,
+originality favored. After the sum, documented post-ranker **adjustments**
+reshape the order — author-diversity decay, an **out-of-network discount** (most
+reach for a small account is non-followers, which is discounted, so per-reader
+saves/replies/dwell matter more than likes), a new-author boost, and a VMRanker
+diversity rerank — and, separately, **visibility filtering** can suppress a post
+regardless of rank. We encode the per-post directions as tunable weights and
+estimate each action's probability from the post; the feed-context adjustments
+are surfaced as strategy notes (`postingStrategyNotes()`), not folded into the
+number. **Treat the number as a relative guide; the subscores and (in Pro) the
+suggestions are the real product.**
 
 ## Run
 

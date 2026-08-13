@@ -1,30 +1,40 @@
 // X (Twitter) ranking weights and tunables.
 //
-// CLEAN-ROOM NOTE: none of X's AGPL-3.0 source is copied here. These are our
+// CLEAN-ROOM NOTE: none of X's published source is copied here. These are our
 // own numbers, chosen to match the PUBLICLY DOCUMENTED STRUCTURE of X's ranking
 // (the action set and their relative ordering), not copied from any params
 // file. Facts (an action exists; replies outweigh likes ~27×) aren't
-// copyrightable; this implementation is ours. That keeps the package free of
-// the AGPL network-copyleft obligation so it can be licensed and priced however
-// the product needs.
+// copyrightable; this implementation is ours. The current xai-org/x-algorithm
+// release is Apache-2.0 (permissive, no network-copyleft), but we stay
+// clean-room regardless so the package can be licensed and priced as the
+// product needs.
 //
-// CURRENT ALGORITHM (Jan 2026 rebuild, xai-org/x-algorithm): ranking is now a
-// single Grok-family transformer ("Phoenix") with ~19 multi-task heads that
-// predict P(action) per candidate; a Weighted Scorer combines them as
-// Final Score = Σ wᵢ·P(actionᵢ), sorted for the feed (no public denominator —
-// it's a relative ranking number). Two hard limits shape what we can do:
-//   1. The trained transformer weights are NOT downloadable — the real model
-//      can't be run on a post.
-//   2. The Weighted Scorer's numeric weights are REDACTED in the open repo
-//      (a private params module).
-// So no one outside X can compute a real score. What IS public: the action set
-// and consistent directional analyses — reply ≫ like (~27×), author
-// back-and-forth strongest, shares/follows/dwell above likes, report/block/mute
-// heavily negative, external links limit distribution, originality favored. We
-// encode those directions as tunable weights, estimate each action's
-// probability from the post (feature heuristics, better with an LLM), and sum.
-// Treat the absolute number as a *relative* guide; the subscores and
-// suggestions are the real product.
+// CURRENT ALGORITHM (xai-org/x-algorithm, README updated 2026-08-13): ranking is
+// a single Grok-family transformer ("Phoenix") whose multi-task heads predict
+// P(action) per candidate; a Weighted Scorer combines them as
+// Final Score = Σ wᵢ·P(actionᵢ) (weights in home-mixer/params/param.rs), sorted
+// for the feed. The published action set is richer than a like/reply/repost
+// summary — it separates:
+//   • Engagement: favorite, reply, repost, QUOTE, share, share-via-DM,
+//     share-via-copy-link (bookmark/save is a documented strong "lasting value"
+//     signal).
+//   • Clicks: post, PROFILE, link, PHOTO-EXPAND, VIDEO-OPEN, quoted-post.
+//   • Attention: video quality view, dwell, dwell time, click dwell time,
+//     active seconds — and "NOT DWELLED" as a negative.
+//   • Author/negative: follow author; not-interested, mute, block, report.
+// After the weighted sum, three post-ranker ADJUSTMENTS reshape the order (see
+// SCORE_ADJUSTMENTS): author-diversity decay, an out-of-network discount, and a
+// new-author boost. A separate VMRanker service then reorders for diversity
+// (a DPP over embeddings), and — crucially — VISIBILITY FILTERING (labels,
+// blocks, mutes, account status) decides whether a post can be shown AT ALL,
+// independently of its rank.
+//
+// Two hard limits still bind us: the trained transformer weights aren't
+// downloadable, and the Weighted Scorer's numeric weights are redacted, so no
+// one outside X computes a real score. We encode the public DIRECTIONS as
+// tunable weights, estimate each action's probability from the post (feature
+// heuristics, better with an LLM), and sum. Treat the absolute number as a
+// *relative* guide; the subscores, adjustments, and suggestions are the product.
 
 // ---- Action weights (the model predicts P(action); score = Σ w·P) ----
 // Our directional constants (the real values are redacted). Their ORDERING, not
@@ -32,10 +42,17 @@
 export const ACTION_WEIGHTS = {
   // Positive engagement the ranker rewards, roughly weakest → strongest.
   like: 0.5, // "fav" — cheap, plentiful; the unit the others are scaled to.
-  retweet: 1.0, // repost / amplification.
+  photoExpand: 0.6, // tap to expand an image — the visual earned a closer look.
+  videoOpen: 0.9, // tap to open/expand a video — intent to actually watch.
+  retweet: 1.0, // repost / amplification (no added commentary).
+  quote: 1.6, // quote-post: repost PLUS a new authored post — amplification above a bare repost.
   share: 3.0, // intentional shares (esp. share-via-DM) signal high value, above a like.
+  // Bookmark / "save for later" — a documented strong "lasting value" signal,
+  // widely reported second only to replies. It says the post is worth returning
+  // to, which is exactly what out-of-network reach rewards. Above share, below reply.
+  bookmark: 4.0,
   follow: 5.0, // a follow straight from the feed is a strong quality signal.
-  openAndDwell: 11.0, // reader opens and dwells (binary dwell + continuous time).
+  openAndDwell: 11.0, // reader opens and dwells (binary dwell + continuous dwell time / active seconds).
   profileClickAndEngage: 12.0, // reader clicks the author's profile AND engages there.
   reply: 13.5, // conversation ≈ 27× a like — one of the strongest positives.
   // The single strongest positive signal: the author replies back into a reply.
@@ -45,7 +62,10 @@ export const ACTION_WEIGHTS = {
 
   // Negative feedback the ranker punishes hard. A single predicted report /
   // block / mute / "not interested" roughly cancels the upside of a strong
-  // post — why "safe but flat" often out-reaches "spicy but risky".
+  // post — why "safe but flat" often out-reaches "spicy but risky". The
+  // published model also treats "not dwelled" (shown, ignored, scrolled past)
+  // as a soft negative; we fold that dwell risk into openAndDwell rather than
+  // double-count it here.
   negativeFeedback: -74.0,
 };
 
@@ -53,8 +73,12 @@ export const ACTION_WEIGHTS = {
 // can report "engagement potential" and "risk" separately.
 export const POSITIVE_ACTIONS = [
   'like',
+  'photoExpand',
+  'videoOpen',
   'retweet',
+  'quote',
   'share',
+  'bookmark',
   'follow',
   'openAndDwell',
   'profileClickAndEngage',
@@ -101,6 +125,43 @@ export const REACH = {
 
   // Floor so no single content choice can zero out the score entirely.
   floor: 0.6,
+};
+
+// ---- Post-ranker score adjustments (documented, applied AFTER Σ w·P) ----
+// These reshape the feed order once every candidate has a base score. They
+// depend on FEED/ACCOUNT context a single-post scorer can't see (who follows
+// you, how many posts of yours are already in this reader's session, your
+// account's impression history), so we do NOT fold them into the per-post
+// number. They're encoded here as documented directions the pipeline uses to
+// advise on posting strategy (cadence, spacing, growth expectations) — see
+// postingStrategyNotes(). Values are directional, not X's real constants.
+export const SCORE_ADJUSTMENTS = {
+  // Author diversity: each post after an author's FIRST in a given reader's
+  // session is multiplied by a decaying factor down to a floor. Practical
+  // effect: firing several posts close together mostly competes with yourself.
+  // Spacing posts out (the scheduler's audience-window queue already helps)
+  // keeps each one landing as an author's "first" for more readers.
+  authorDiversityDecay: 0.5, // rough per-additional-post decay.
+  authorDiversityFloor: 0.25,
+
+  // Out-of-network discount: posts shown to people who DON'T follow you are
+  // multiplied by a sub-1.0 factor. For a self-marketing / builder account most
+  // reach is out-of-network, so it eats this discount by default. What overcomes
+  // it is high PER-READER signal — replies, bookmarks (saves), and dwell — not
+  // raw likes. This is why "save-worthy / reply-worthy for a stranger" beats
+  // "like-worthy for someone who already gets it".
+  outOfNetworkDiscount: 0.75,
+
+  // New-author boost: accounts below an impression threshold get lifted toward
+  // target feed positions — a temporary tailwind for small/new accounts that
+  // fades as you grow. Don't build a strategy that assumes it persists.
+  newAuthorBoost: 1.25,
+
+  // VMRanker diversity rerank (a DPP over post embeddings) runs after all of the
+  // above and de-duplicates the final list. Near-identical posts (same angle,
+  // same image) suppress each other, so genuine variety in text AND visuals
+  // beats cosmetic wording changes.
+  diversityRerank: true,
 };
 
 // ---- Length model ----

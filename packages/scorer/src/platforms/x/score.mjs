@@ -26,12 +26,16 @@ export function featurePriors(f) {
   // Baselines for an average post, nudged by content signals.
   let like = 0.14;
   let retweet = 0.03;
+  let quote = 0.008;
   let share = 0.015;
+  let bookmark = 0.02;
   let follow = 0.01;
   let reply = 0.04;
   let replyEngagedByAuthor = 0.02;
   let profileClickAndEngage = 0.03;
   let openAndDwell = 0.08;
+  let photoExpand = f.mediaType === 'image' ? 0.05 : 0;
+  let videoOpen = f.mediaType === 'video' ? 0.12 : 0;
   let videoWatch50 = f.mediaType === 'video' ? 0.2 : 0;
   let negativeFeedback = 0.02;
 
@@ -40,15 +44,26 @@ export function featurePriors(f) {
     reply += 0.05;
     replyEngagedByAuthor += 0.03;
   }
-  // Media lifts dwell and likes.
+  // Media lifts dwell and likes, and adds media-click intent (photo-expand /
+  // video-open), which the model scores as its own positive.
   if (f.hasMedia) {
     like += 0.04;
     openAndDwell += 0.04;
     share += 0.005;
+    if (f.mediaType === 'image') photoExpand += 0.02;
+    if (f.mediaType === 'video') videoOpen += 0.03;
   }
-  // Scannable list-y posts get opened/dwelt on.
-  if (f.looksLikeList) openAndDwell += 0.03;
-  // A thin one-liner under-informs; a rich post earns more dwell.
+  // Scannable list-y posts get opened/dwelt on AND saved for later — bookmarks
+  // reward reference-quality, "come back to this" content.
+  if (f.looksLikeList) {
+    openAndDwell += 0.03;
+    bookmark += 0.03;
+  }
+  // A substantive post in the ideal length band reads as worth saving; a genuine
+  // take is worth a quote. A thin one-liner under-informs and gets scrolled past
+  // (a "not dwelled" negative in the model), so it earns less dwell.
+  if (f.length >= LENGTH.idealLow && f.length <= LENGTH.idealHigh) bookmark += 0.015;
+  if (f.invitesReply) quote += 0.006;
   if (f.length < LENGTH.min) openAndDwell -= 0.03;
 
   // Spam-ish tells raise negative-feedback risk (the -74 weight bites here).
@@ -59,8 +74,12 @@ export function featurePriors(f) {
 
   const p = {
     like,
+    photoExpand,
+    videoOpen,
     retweet,
+    quote,
     share,
+    bookmark,
     follow,
     reply,
     replyEngagedByAuthor,
@@ -71,6 +90,26 @@ export function featurePriors(f) {
   };
   for (const k of Object.keys(p)) p[k] = clamp(p[k], 0, 1);
   return p;
+}
+
+// Directional, feed-context guidance from the documented post-ranker
+// adjustments (SCORE_ADJUSTMENTS). These are NOT part of the per-post score —
+// they depend on who follows you and what else you've posted — so we surface
+// them as strategy notes the auto-poster can act on (cadence, growth framing,
+// diversity). Pure and side-effect-free. `ctx` is optional:
+//   { isNewAccount?: boolean, postedRecently?: boolean }
+export function postingStrategyNotes(ctx = {}) {
+  const notes = [
+    'Most of your reach is out-of-network (non-followers), which X discounts, so the post has to land for a stranger with zero context — the per-reader signals that beat that discount are replies, bookmarks (saves) and dwell, not raw likes.',
+    'X down-ranks a feed full of your near-identical updates (author-diversity decay + VMRanker diversity rerank), so vary the angle and the visual across posts, not just the opening word.',
+  ];
+  if (ctx.postedRecently) {
+    notes.push('You posted recently: back-to-back posts mostly compete with each other in the same reader\'s session (author-diversity decay). Let the scheduler space them into separate audience windows.');
+  }
+  if (ctx.isNewAccount) {
+    notes.push('New/small accounts get a temporary new-author boost that fades as you grow — use it, but don\'t build a strategy that assumes it persists.');
+  }
+  return notes;
 }
 
 // Deterministic reach multiplier from documented heuristics. Returns the

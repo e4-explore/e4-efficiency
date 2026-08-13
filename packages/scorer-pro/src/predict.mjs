@@ -15,13 +15,18 @@ const LLM_WEIGHT = 0.7;
 
 function buildPrompt(features) {
   return `You are modeling how X's (Twitter's) current Grok/Phoenix recommendation model would treat this post.
-The model predicts a probability for each engagement action, then sums them weighted. Relative weights (for context, weakest→strongest):
-- like ${ACTION_WEIGHTS.like}, retweet ${ACTION_WEIGHTS.retweet}, share ${ACTION_WEIGHTS.share} (esp. share-via-DM), follow ${ACTION_WEIGHTS.follow}
+The model predicts a probability for each action, then sums them weighted. Relative weights (for context, weakest→strongest):
+- like ${ACTION_WEIGHTS.like}, photo-expand ${ACTION_WEIGHTS.photoExpand} / video-open ${ACTION_WEIGHTS.videoOpen} (a tap to look closer at the media), retweet ${ACTION_WEIGHTS.retweet}, quote ${ACTION_WEIGHTS.quote}, share ${ACTION_WEIGHTS.share} (esp. share-via-DM)
+- bookmark/save ${ACTION_WEIGHTS.bookmark} (a strong "lasting value" signal, second only to replies), follow ${ACTION_WEIGHTS.follow}
 - open + dwell ${ACTION_WEIGHTS.openAndDwell}, profile click + engage ${ACTION_WEIGHTS.profileClickAndEngage}, reply ${ACTION_WEIGHTS.reply} (~27× a like)
 - the author replying back into a reply ${ACTION_WEIGHTS.replyEngagedByAuthor} (by far the strongest positive)
-- negative feedback (report/block/mute/"not interested") ${ACTION_WEIGHTS.negativeFeedback} (punishes hard)
+- negative feedback (report/block/mute/"not interested"/scrolled past without dwelling) ${ACTION_WEIGHTS.negativeFeedback} (punishes hard)
 
-Estimate, for a typical reader who sees this post, the PROBABILITY (0..1) of each action. Be calibrated: a like comes from a small fraction of viewers, replies are rarer, author-reply-exchanges rarer still, follows/shares rarest. Judge the content on its merits — original, substantive posts that invite genuine back-and-forth score high; recycled/aggregated/low-effort or bland posts score low; spammy/misleading/inflammatory posts carry real negative-feedback risk. Hashtags barely matter now (the model reads meaning, not tags).
+Feed context that shapes what actually wins (not part of these per-action probabilities, but judge with it in mind):
+- Most reach for a small/creator account is OUT-OF-NETWORK, which X discounts. The signals that overcome that discount are replies, bookmarks (saves) and dwell — so reward posts a STRANGER with zero context would save or read twice, not just posts an existing fan would like.
+- Ranking and visibility are separate: even a high-scoring post can be suppressed by visibility filtering if it trips a safety/spam label. Misleading, inflammatory, or engagement-farming posts risk that regardless of engagement.
+
+Estimate, for a typical reader who sees this post, the PROBABILITY (0..1) of each action. Be calibrated: a like comes from a small fraction of viewers, bookmarks/replies are rarer, author-reply-exchanges rarer still, follows/shares/quotes rarest; photo-expand/video-open only apply when media is present. Judge the content on its merits — original, substantive posts that invite genuine back-and-forth or are worth saving score high; recycled/aggregated/low-effort or bland posts score low; spammy/misleading/inflammatory posts carry real negative-feedback and visibility risk. Hashtags barely matter now (the model reads meaning, not tags).
 
 POST:
 """
@@ -32,7 +37,8 @@ Has media attached: ${features.hasMedia ? features.mediaType : 'no'}
 Return ONLY JSON:
 {
   "probabilities": {
-    "like": 0..1, "retweet": 0..1, "share": 0..1, "follow": 0..1, "reply": 0..1,
+    "like": 0..1, "photoExpand": 0..1, "videoOpen": 0..1, "retweet": 0..1, "quote": 0..1,
+    "share": 0..1, "bookmark": 0..1, "follow": 0..1, "reply": 0..1,
     "replyEngagedByAuthor": 0..1, "profileClickAndEngage": 0..1,
     "openAndDwell": 0..1, "videoWatch50": 0..1, "negativeFeedback": 0..1
   },

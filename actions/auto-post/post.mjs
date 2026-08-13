@@ -75,9 +75,11 @@ Engagement rubric (what makes a post worth reading):
 - Lead with the idea or the payoff, not the act of shipping. The first line has to earn the read on its own; a reader who doesn't know the product should still get why this is interesting.
 - A genuine take or an honest question can lift a post from informative to engaging, but only when it's TRUE to the change and something a real builder would actually say. It has to be earned by the substance, never manufactured, never clickbait or reply-bait. No honest take to make? Ship the clean statement.
 - Concrete beats abstract: name the thing ("live odds now refresh every 30s"), never "improved performance".
+- Earn the cold read. Most of your reach is out-of-network (people who don't follow you and have zero context on the product), and X discounts out-of-network posts, so the line has to land for a stranger. The per-reader signals that overcome that discount are replies, saves (bookmarks), and dwell, not raw likes.
+- Save-worthy beats like-worthy: a concrete, reference-quality detail (a number, a before/after, a crisp how or why) is what gets bookmarked, and saves are one of the strongest ranking signals there is. If a stranger would screenshot or come back to the line, it's working.
 - State it as a fact about the product, not a narrated action: "the 'Create App' button makes it faster to spin up a new project", not "We renamed the setup button to 'Create App' so it's easier to spin up a new project".
 - Sound like a person, not a changelog or a press release. Casual and direct beats stiff and formal.
-- Vary structure against recent posts: if the last post opened with the feature name, don't do it again.
+- Be genuinely different from your recent posts, not just reworded. X's diversity rerank and author-diversity decay both down-rank a feed full of your near-identical updates, so vary the angle and the framing (and the visual), not only the first word.
 - When a push bundles several distinct changes: each gets its own line, ordered
   most user-facing first, no connective narration ("also", "plus", "additionally")
   between them. Every line stands alone, same rules as a single post.
@@ -326,7 +328,7 @@ POST DRAFT: ${postText}
 COMMIT MESSAGE: ${commitMessage}
 
 Below are ${shots.length} screenshots, in order (index 0 first): ${shots.map((s, i) => `[${i}] ${s.path}`).join(', ')}.
-Pick the one that best SHOWS the change described — prefer visible content over empty states, error pages, or generic landing pages. Also favor a TIGHT, change-focused framing where the subject fills the frame and reads clearly at thumbnail size in a feed; down-rank wide catalog/gallery/storybook views where the subject is small amid lots of whitespace.
+Pick the one that best SHOWS the change described — prefer visible content over empty states, error pages, or generic landing pages. Also favor a TIGHT, change-focused framing where the subject fills the frame and reads clearly at thumbnail size in a feed; down-rank wide catalog/gallery/storybook views where the subject is small amid lots of whitespace. Prefer a frame with genuine detail that rewards a closer look: X counts a photo-expand tap (someone tapping to enlarge the image) as a positive signal, so pick the shot a curious viewer would actually want to open, not a flat or near-empty one.
 
 Return ONLY JSON: { "best_index": number, "reason": string }`,
     },
@@ -826,7 +828,7 @@ Return ONLY JSON:
     try {
       const pick = await gemini([
         {
-          text: `Choose the single most compelling screenshot to attach to this post. Prefer a clean, complete-looking state that clearly shows the change; reject anything that looks half-rendered, mid-transition, or broken. Favor a TIGHT, change-focused frame where the subject fills most of the image and reads clearly at thumbnail size in a feed; down-rank wide catalog/gallery/storybook grids where the subject is small amid lots of empty space.
+          text: `Choose the single most compelling screenshot to attach to this post. Prefer a clean, complete-looking state that clearly shows the change; reject anything that looks half-rendered, mid-transition, or broken. Favor a TIGHT, change-focused frame where the subject fills most of the image and reads clearly at thumbnail size in a feed; down-rank wide catalog/gallery/storybook grids where the subject is small amid lots of empty space. Prefer a frame with real detail that rewards a closer look: X counts a photo-expand tap (someone enlarging the image) as a positive signal, so pick the one a curious viewer would actually want to open.
 
 POST DRAFT: ${postText}
 COMMIT MESSAGE: ${commitMessage}
@@ -1328,7 +1330,7 @@ async function recordInteractionVideo(browser, baseUrl, change, shared, tag) {
       try {
         decision = await gemini([
           {
-            text: `You are driving a real web page to make a SHORT SCREEN RECORDING that shows off one UI interaction for a social post. First navigate to the screen where it happens, then perform the SINGLE interaction that best demonstrates the change — e.g. drag a list row to reorder it, expand/collapse a panel, switch a tab, hover to reveal actions. A synthetic cursor is drawn for you; just choose actions.
+            text: `You are driving a real web page to make a SHORT SCREEN RECORDING that shows off one UI interaction for a social post. First navigate to the screen where it happens, then perform the SINGLE interaction that best demonstrates the change — e.g. drag a list row to reorder it, expand/collapse a panel, switch a tab, hover to reveal actions. A synthetic cursor is drawn for you; just choose actions. Prefer the interaction with the clearest, most satisfying VISIBLE payoff (something visibly moves, opens, or updates): X counts opening a video and watching it through as positive signals, so pick the one that makes a stranger want to tap play and keep watching, not a subtle change that reads as nothing happening.
 
 Get to the SPECIFIC component/screen the change is about — do NOT settle for a generic landing / welcome / "Start" / overview page. To reach a component in a catalog fast: if there's a search/filter box (often "Find components", "Search", ⌘K), use action "type" to enter the target name, then click the matching result; or expand a collapsed nav group (e.g. "Components") and click the item.${targetLine}
 
@@ -2237,7 +2239,9 @@ ${wantRoutes ? `      "candidate_paths": string[],  // 1 to 3 URL paths most lik
 
 ${RUBRIC}
 
-You are the editor. Improve the draft below so it scores as high as possible on the rubric while staying strictly inside the voice rules. If the draft is already strong, tighten it; do not pad it. If the draft has multiple lines (one per bundled change), keep it multi-line: do not collapse it into one sentence, and do not add or drop lines.
+You are the editor. Improve the draft below so it scores as high as possible on the rubric while staying strictly inside the voice rules. Scoring high means a stranger scrolling past would stop, read, and want to SAVE or reply to it (bookmarks, replies, and dwell are what carry an out-of-network post), not just recognize it. If the draft is already strong, tighten it; do not pad it. If the draft has multiple lines (one per bundled change), keep it multi-line: do not collapse it into one sentence, and do not add or drop lines.
+
+Sanity-check visibility, not just engagement: X decides whether a post is shown at all (visibility filtering) separately from how it ranks. Keep the draft clean of anything that could trip a safety or spam label — no misleading claims, no manufactured controversy, no engagement-farming. A safe, substantive post a stranger would save beats a spicy one that risks being suppressed.
 
 Before returning, reread the draft and strip anything that reads as AI-written: em/en dashes, the "feature — benefit" appendage, rule-of-three lists, and the banned tell-words in the voice rules. Rewrite those spots in plain, casual, human phrasing rather than just deleting the punctuation.
 ${historyBlock}${prBlock}
