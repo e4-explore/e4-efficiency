@@ -1,0 +1,58 @@
+name: Release (move v1 + cut version tag)
+
+# Every merge to main ships to consumers automatically:
+#   - moves the floating `v1` tag (what referenced-action consumers pin) to the
+#     new commit, so `uses: e4-explore/e4-efficiency/actions/auto-post@v1` picks
+#     up the change on its next run with no re-vendoring;
+#   - cuts the next immutable v1.x.0 release tag for history/rollback.
+# Runs with the built-in GITHUB_TOKEN (contents: write), which can push tags —
+# so no human needs tag permissions and mobile "push + merge" is all it takes.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Move v1 and cut the next v1.x.0 tag
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force origin
+          latest=$(git tag -l 'v1.*.*' | sort -V | tail -n1)
+          [ -n "$latest" ] || latest="v1.0.0"
+          base=${latest#v}
+          major=$(echo "$base" | cut -d. -f1)
+          minor=$(echo "$base" | cut -d. -f2)
+          newtag="v${major}.$((minor + 1)).0"
+          echo "Latest tag: $latest -> new tag: $newtag @ $SHA"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git rev-parse -q --verify "refs/tags/$newtag" >/dev/null; then
+            echo "$newtag already exists; leaving it as-is."
+          else
+            git tag -a "$newtag" -m "Release $newtag" "$SHA"
+            git push origin "$newtag"
+            echo "Created $newtag"
+          fi
+
+          git tag -f v1 "$SHA"
+          git push origin -f v1
+          echo "Moved v1 -> $SHA"

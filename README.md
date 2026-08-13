@@ -217,6 +217,16 @@ self-contained. When you want cross-repo features (a unified posting queue,
 shared analytics), that's the moment to graduate to a hosted service — not
 before.
 
+## Releasing
+
+Releases are automated. Every merge to `main` runs
+[`.github/workflows/release.yml`](.github/workflows/release.yml), which moves the
+floating **`v1`** tag to the merged commit and cuts the next immutable
+**`v1.x.0`** tag. Consumers that pin `uses: e4-explore/e4-efficiency/actions/auto-post@v1`
+pick up the change on their next run with no re-vendoring — so shipping is just
+"merge to `main`", no manual tagging or tag permissions required. (You can also
+run the workflow by hand from the Actions tab via **workflow_dispatch**.)
+
 ## Cost
 
 - Gemini (flash-latest / flash-lite): free tier covers ~1500 requests/day. One
