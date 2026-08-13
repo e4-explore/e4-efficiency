@@ -1302,6 +1302,12 @@ Return ONLY JSON:
 
       const isCapture = decision.is_capture === true;
       if (isCapture && captureStart === null) captureStart = elapsed();
+      // On the showcase step the camera punches in right after the action, so
+      // keep the post-action settle short — the zoom-in should follow the click
+      // by a beat, not a full second, and it eases in AS the state finishes
+      // settling (the FocuSee feel). Navigation steps keep the longer settle so
+      // the next screenshot the vision loop sees is stable.
+      const settleMs = isCapture ? 160 : 600;
       let cursorAt = null; // where the synthetic cursor ends up, for the camera
       try {
         if (decision.action === 'drag') {
@@ -1319,27 +1325,30 @@ Return ONLY JSON:
           const b = boxCenter(await src.boundingBox());
           if (b) await apMove(page, b.x, b.y);
           await src.hover({ timeout: 8000 });
-          await sleep(700);
+          await sleep(isCapture ? 220 : 700);
           cursorAt = b;
         } else if (decision.action === 'select') {
           await src.selectOption(decision.value ?? '', { timeout: 8000 });
-          await sleep(600);
+          await sleep(settleMs);
         } else if (decision.action === 'type') {
           const b = boxCenter(await src.boundingBox());
           if (b) { await apMove(page, b.x, b.y); await sleep(120); }
           await typeIntoField(page, src, decision.value); // focuses + fills, no submit; handles combobox wrappers
-          await sleep(600);
+          await sleep(settleMs);
           cursorAt = b;
         } else {
           const b = boxCenter(await src.boundingBox());
           if (b) { await apMove(page, b.x, b.y); await sleep(150); }
           await src.click({ timeout: 8000 });
-          await sleep(600);
+          await sleep(settleMs);
           cursorAt = b;
         }
         history.push(`${decision.action} "${picked.name}"${decision.action === 'type' ? ` = "${decision.value ?? ''}"` : ''}`);
         console.log(`Recorder step ${step}: ${decision.action} "${picked.name}"${isCapture ? ' [capture]' : ''} — ${decision.reason ?? ''}`);
-        await page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
+        // The showcase interaction is terminal, so don't let a settling network
+        // gate the punch-in — zoom promptly. Navigation steps still wait so the
+        // loop's next screenshot is stable.
+        if (!isCapture) await page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
       } catch (err) {
         console.warn(`Recorder action failed (${err.message}); stopping.`);
         break;
