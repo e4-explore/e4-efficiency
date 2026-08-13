@@ -1126,6 +1126,75 @@ export async function cameraReset(page, { cursor = null, ms = 850 } = {}) {
   await sleep(ms + 150);
 }
 
+// ---------------------------------------------------------------- pan camera
+//
+// A click-FOLLOWING camera for scripted flows: zoom in on each click, then PAN
+// to the next. Unlike the single-punch camera above (which moves
+// transform-origin per shot), this pins transform-origin at 0,0 and expresses
+// the camera purely as translate()+scale(), so CSS smoothly interpolates a pan
+// from one target to the next. Same principle otherwise: transform on <body>,
+// cursor on <html> gliding + scaling alongside.
+const FLOW_CAMERA_JS = `(() => {
+  if (window.__apFlowInstalled) return;
+  window.__apFlowInstalled = true;
+  document.body.style.transformOrigin = '0 0';
+  window.__apFlowPan = (tx, ty, s, ms) => {
+    const b = document.body; if (!b) return;
+    b.style.transition = 'transform ' + ms + 'ms cubic-bezier(.22,1,.36,1)';
+    b.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + s + ')';
+    window.__apZoomCursor && window.__apZoomCursor(s, ms);
+  };
+  window.__apFlowReset = (ms) => {
+    const b = document.body; if (!b) return;
+    b.style.transition = 'transform ' + ms + 'ms cubic-bezier(.4,0,.2,1)';
+    b.style.transform = 'none';
+    window.__apZoomCursor && window.__apZoomCursor(1, ms);
+  };
+})()`;
+
+// Pan-camera keyframe (transform-origin 0,0): center rest-space point `restC`
+// at `scale`, clamped per axis to [-(s-1)*dim, 0] so a content edge is never
+// pulled inside the viewport (an edge target simply punches in softer). A point
+// p in rest space then lands on screen at p*s + t — see flowMapPoint.
+export function flowKeyframe(restC, scale, viewport = { width: 1280, height: 800 }) {
+  const s = Math.max(1, scale);
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  return {
+    s,
+    tx: clamp(viewport.width / 2 - restC.x * s, -(s - 1) * viewport.width, 0),
+    ty: clamp(viewport.height / 2 - restC.y * s, -(s - 1) * viewport.height, 0),
+  };
+}
+
+// On-screen position of a rest-space point under a pan keyframe.
+export function flowMapPoint(p, k) {
+  return { x: p.x * k.s + k.tx, y: p.y * k.s + k.ty };
+}
+
+// Rest-space position of a point currently measured on-screen under keyframe k
+// (inverse of flowMapPoint) — lets us convert a freshly measured, possibly
+// post-DOM-change element box back to rest space to plan the next pan.
+export function flowUnmapPoint(sc, k) {
+  return { x: (sc.x - k.tx) / k.s, y: (sc.y - k.ty) / k.s };
+}
+
+export const REST_CAMERA = { s: 1, tx: 0, ty: 0 };
+
+export async function panCameraTo(page, k, { cursor = null, ms = 650 } = {}) {
+  await page.evaluate(FLOW_CAMERA_JS);
+  await page.evaluate(([tx, ty, s, m]) => window.__apFlowPan(tx, ty, s, m), [k.tx, k.ty, k.s, ms]);
+  if (cursor) {
+    const p = flowMapPoint(cursor, k);
+    await page.evaluate(([x, y, m]) => window.__apGlideCursor && window.__apGlideCursor(x, y, m), [p.x, p.y, ms]).catch(() => {});
+  }
+  await sleep(ms + 180); // let the ease settle before measuring/acting
+}
+
+export async function flowCameraReset(page, { ms = 650 } = {}) {
+  await page.evaluate((m) => window.__apFlowReset && window.__apFlowReset(m), ms).catch(() => {});
+  await sleep(ms + 150);
+}
+
 // Like snapshotInteractives, but also offers structural "draggable candidates"
 // (list rows, drag handles, sortable items) so the model can pick a drag
 // source/target — those are usually plain <li>/<div>s the interactive tagger
@@ -1421,6 +1490,259 @@ Return ONLY JSON:
   return { type: 'video', file: mp4, note: `screen recording of the interaction on ${startUrl}` };
 }
 
+// ---------------------------------------------------------------- scripted flows
+//
+// An owner defines a named flow in natural language (config.json "flows"); the
+// recorder walks its steps, Gemini resolving each step to one element action,
+// and the click-following pan camera punches in on every click and pans to the
+// next — the productized version of the hand-built multi-click zoom-follow.
+// Fail-open: any trouble returns null and the caller falls back to the
+// autonomous recorder, then to a still.
+
+// Tiny glob matcher for flow.match.paths: supports ** (any depth) and * (one
+// segment). Enough to target a change's files without a dependency.
+export function globMatch(glob, path) {
+  const re = new RegExp('^' + String(glob)
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*\*/g, ' ')
+    .replace(/\*/g, '[^/]*')
+    .replace(/ /g, '.*') + '$');
+  return re.test(String(path));
+}
+
+// Choose a flow for a video-capture change: by navTarget substring or file
+// globs. A criteria-less flow is eligible only when it is the sole flow.
+export function pickFlow(flows, change) {
+  const usable = (Array.isArray(flows) ? flows : []).filter((f) => f && Array.isArray(f.steps) && f.steps.length);
+  if (!usable.length) return null;
+  const navTarget = (typeof change?.nav_target === 'string' ? change.nav_target : '').toLowerCase();
+  const files = Array.isArray(change?.files) ? change.files : [];
+  const hasCriteria = (m) => m && ((typeof m.navTarget === 'string' && m.navTarget.trim()) || (Array.isArray(m.paths) && m.paths.length));
+  const matches = (f) => {
+    const m = f.match || {};
+    if (!hasCriteria(m)) return false;
+    const byNav = typeof m.navTarget === 'string' && m.navTarget.trim() && navTarget.includes(m.navTarget.trim().toLowerCase());
+    const byPath = Array.isArray(m.paths) && m.paths.some((g) => files.some((fp) => globMatch(g, fp)));
+    return !!(byNav || byPath);
+  };
+  const explicit = usable.find(matches);
+  if (explicit) return explicit;
+  const criteriaLess = usable.filter((f) => !hasCriteria(f.match));
+  return usable.length === 1 && criteriaLess.length === 1 ? criteriaLess[0] : null;
+}
+
+// Default step resolver: Gemini executes ONE scripted step. Narrow prompt (vs.
+// the open-ended "pick a showcase" loop) so it reliably does what was scripted.
+async function geminiResolveStep({ stepText, screenshotPath, elements, history, payoff }) {
+  const list = elements.map((it) => `- ${it.ref} [${it.role || it.tag}]${it.draggable ? ' draggable' : ''}${it.editable ? ' editable' : ''} "${it.name}"${it.options ? ` options=${JSON.stringify(it.options)}` : ''}`).join('\n');
+  const prompt = payoff
+    ? `You are finishing a scripted product-flow screen recording. The camera should punch in on the RESULT/payoff of the flow (e.g. the score, the confirmation message, the changed value). Return a SHORT, distinctive VISIBLE TEXT snippet from that result region so it can be located on the page (e.g. "/ 100", "weak", "Saved", the number). Prefer something in the result, not a button.
+GOAL: ${stepText}
+The attached screenshot is the current state.
+Return ONLY JSON: { "text": string|null, "reason": string }`
+    : `You are executing ONE step of a scripted product-flow screen recording. Perform exactly the step below and nothing else. A synthetic cursor is drawn for you.
+STEP: ${stepText}
+DONE SO FAR: ${history.length ? history.join(' | ') : '(none)'}
+
+The attached screenshot is the CURRENT state. Elements you may act on (pick by "ref"; "editable":true = a field you can type into; "draggable":true = a row you can drag):
+${list}
+
+Rules: choose the ONE action that carries out this step. "type" fills a field (never submits). "press" sends a key (use for "press enter"/"score it"/"submit" style steps; set "key":"Enter"). Never buy, delete, or send anything. If the step is already satisfied or impossible, set "done":true.
+Return ONLY JSON:
+{ "action": "click"|"type"|"select"|"hover"|"drag"|"press"|null, "ref": string|null, "value": string|null, "key": string|null, "done": boolean, "reason": string }`;
+  return gemini([{ text: prompt }, { inline_data: { mime_type: 'image/png', data: readFileSync(screenshotPath).toString('base64') } }]);
+}
+
+// Records a scripted flow. resolveStep is injectable (Gemini-backed by default;
+// tests pass a deterministic resolver). Returns { type:'video', file, note } or
+// null on any failure so the caller can fall back.
+export async function recordScriptedFlow(browser, baseUrl, flow, shared, tag, { resolveStep = geminiResolveStep } = {}) {
+  const zoomCamera = shared.zoomCamera !== false;
+  const steps = flow.steps.map((s) => (typeof s === 'string' ? s.trim() : '')).filter(Boolean);
+  if (!steps.length) return null;
+  const startUrl = new URL(flow.url || '/', baseUrl).toString();
+
+  const dir = join(tmpdir(), `auto-post-flow-${tag}`);
+  mkdirSync(dir, { recursive: true });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, recordVideo: { dir, size: { width: 1280, height: 800 } } });
+  const page = await context.newPage();
+  let video = null;
+  let cam = REST_CAMERA;
+  let captureStart = null;
+  let acted = 0;
+  const history = [];
+  const t0 = Date.now();
+  const elapsed = () => (Date.now() - t0) / 1000;
+
+  // Raw-mouse click at a screen point with the cursor press animation — used
+  // while zoomed, where the target's on-screen box was measured moments ago.
+  const pressClickAt = async (p) => {
+    await apMove(page, p.x, p.y);
+    await sleep(120);
+    await page.mouse.down();
+    await page.evaluate(() => window.__apPressCursor && window.__apPressCursor(true)).catch(() => {});
+    await sleep(110);
+    await page.mouse.up();
+    await page.evaluate(() => window.__apPressCursor && window.__apPressCursor(false)).catch(() => {});
+    await sleep(360);
+  };
+  // Zoom-follow to a located element and return its settled on-screen center.
+  const zoomToTarget = async (loc) => {
+    const box = await loc.boundingBox();
+    if (!box) return null;
+    const scCenter = boxCenter(box);
+    if (!zoomCamera) return scCenter; // flat: no camera, click where it is
+    const restC = flowUnmapPoint(scCenter, cam);
+    const restBox = { width: box.width / cam.s, height: box.height / cam.s };
+    const k = flowKeyframe(restC, zoomScaleForBox(restBox));
+    await panCameraTo(page, k, { cursor: restC });
+    cam = k;
+    const b2 = await loc.boundingBox();
+    return b2 ? boxCenter(b2) : flowMapPoint(restC, k);
+  };
+
+  // snapshotForRecorder skips already-tagged elements (it's built to run once
+  // per page state); across flow steps the same controls persist, so clear the
+  // tags first and let it re-tag the full current DOM every step.
+  const freshSnapshot = async () => {
+    await page.evaluate(() => document.querySelectorAll('[data-autopost-ref]').forEach((e) => e.removeAttribute('data-autopost-ref'))).catch(() => {});
+    return (await snapshotForRecorder(page)).filter((it) => !UNSAFE_ACTION_NAME.test(it.name)).slice(0, 44);
+  };
+
+  try {
+    await page.goto(startUrl, { waitUntil: 'networkidle', timeout: 30_000 }).catch(async () => {
+      await page.goto(startUrl, { waitUntil: 'load', timeout: 30_000 });
+    });
+    video = page.video();
+    await ensureCursor(page);
+    await page.evaluate(FLOW_CAMERA_JS);
+    await sleep(500);
+    captureStart = elapsed();
+
+    for (let i = 0; i < steps.length; i++) {
+      await ensureCursor(page);
+      const offered = await freshSnapshot();
+      const shot = join(tmpdir(), `auto-post-flowframe-${tag}-${i}.png`);
+      await page.screenshot({ path: shot, fullPage: false });
+
+      let decision;
+      try {
+        decision = await resolveStep({ stepText: steps[i], screenshotPath: shot, elements: offered, history, index: i });
+      } catch (err) {
+        console.warn(`Flow "${flow.name}": step ${i} resolver failed (${err.message}); stopping.`);
+        break;
+      }
+      if (!decision || decision.done) { console.log(`Flow "${flow.name}": step ${i} done/skip — ${decision?.reason ?? ''}`); continue; }
+
+      const action = decision.action;
+      try {
+        if (action === 'press') {
+          await page.keyboard.press(decision.key || 'Enter');
+          await sleep(500);
+        } else {
+          const loc = decision.ref ? refLocator(page, decision.ref) : null;
+          const picked = offered.find((it) => it.ref === decision.ref);
+          if (!loc || !picked) { console.warn(`Flow "${flow.name}": step ${i} ref ${decision.ref} unusable; stopping.`); break; }
+          if (action === 'type') {
+            if (zoomCamera && cam !== REST_CAMERA) { await flowCameraReset(page); cam = REST_CAMERA; }
+            const b = boxCenter(await loc.boundingBox().catch(() => null));
+            if (b) { await apMove(page, b.x, b.y); await sleep(120); }
+            await typeIntoField(page, loc, decision.value);
+            await sleep(400);
+          } else if (action === 'select') {
+            const at = await zoomToTarget(loc);
+            if (at) { await apMove(page, at.x, at.y); await sleep(120); }
+            await loc.selectOption(decision.value ?? '', { timeout: 8000 });
+            await sleep(400);
+          } else if (action === 'hover') {
+            const at = await zoomToTarget(loc);
+            if (at) await apMove(page, at.x, at.y);
+            await loc.hover({ timeout: 8000 }).catch(() => {});
+            await sleep(600);
+          } else if (action === 'drag') {
+            if (zoomCamera && cam !== REST_CAMERA) { await flowCameraReset(page); cam = REST_CAMERA; }
+            const from = boxCenter(await loc.boundingBox());
+            if (from) await apDrag(page, from, { x: from.x, y: from.y + 140 });
+          } else { // click / toggle
+            const at = await zoomToTarget(loc);
+            if (!at) { console.warn(`Flow "${flow.name}": step ${i} target has no box; stopping.`); break; }
+            await pressClickAt(at);
+          }
+          history.push(`${action} "${picked.name}"${action === 'type' ? ` = "${decision.value ?? ''}"` : ''}`);
+        }
+        acted++;
+        console.log(`Flow "${flow.name}" step ${i}: ${action} — ${decision.reason ?? ''}`);
+        await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+      } catch (err) {
+        console.warn(`Flow "${flow.name}": step ${i} action failed (${err.message}); stopping.`);
+        break;
+      }
+    }
+
+    // Optional payoff punch-in on the flow's result, then ease out. The result
+    // (a score, a confirmation) is usually NON-interactive, so the resolver
+    // returns a visible text snippet to locate rather than an element ref.
+    if (acted > 0) {
+      let payoffText = null;
+      if (zoomCamera && flow.payoff) {
+        // The result (score, confirmation) often renders async after the last
+        // step — let it settle before the resolver looks, or it'll describe an
+        // empty state.
+        await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => {});
+        await sleep(1500);
+        await ensureCursor(page);
+        const offered = await freshSnapshot();
+        const shot = join(tmpdir(), `auto-post-flowpayoff-${tag}.png`);
+        await page.screenshot({ path: shot, fullPage: false });
+        try {
+          const d = await resolveStep({ stepText: flow.payoff, screenshotPath: shot, elements: offered, history, payoff: true });
+          payoffText = d && typeof d.text === 'string' && d.text.trim() ? d.text.trim() : null;
+        } catch { /* skip payoff on resolver trouble */ }
+      }
+      if (zoomCamera && payoffText) {
+        // Give the located text a moment to actually be in the DOM.
+        await page.waitForFunction((q) => document.body.innerText.toLowerCase().includes(q), payoffText.toLowerCase(), { timeout: 4000 }).catch(() => {});
+        const box = await page.evaluate((txt) => {
+          const q = txt.toLowerCase();
+          const leaves = [...document.querySelectorAll('*')].filter((e) => !e.children.length && (e.textContent || '').toLowerCase().includes(q));
+          if (!leaves.length) return null;
+          leaves.sort((a, b) => (a.textContent.length - b.textContent.length)); // most specific match
+          const r = leaves[0].getBoundingClientRect();
+          return r.width > 2 && r.height > 2 ? { x: r.x, y: r.y, width: r.width, height: r.height } : null;
+        }, payoffText);
+        if (box) {
+          const restC = flowUnmapPoint(boxCenter(box), cam);
+          const k = flowKeyframe(restC, 1.6); // fixed, gentle payoff zoom framing the result + its surroundings
+          await panCameraTo(page, k, { cursor: restC });
+          cam = k;
+          await sleep(1600);
+        }
+      }
+      if (zoomCamera && cam !== REST_CAMERA) await flowCameraReset(page);
+    }
+    await sleep(300);
+  } finally {
+    await page.close().catch(() => {});
+    await context.close().catch(() => {});
+  }
+
+  const totalDur = elapsed();
+  let webm = null;
+  try { webm = video ? await video.path() : null; } catch { webm = null; }
+  if (!webm || !existsSync(webm) || acted === 0 || captureStart === null) {
+    console.warn(`Flow "${flow.name}": nothing usable recorded; falling back.`);
+    return null;
+  }
+  const mp4 = join(tmpdir(), `auto-post-flow-${tag}.mp4`);
+  const ok = await ffmpegToMp4(webm, mp4, Math.max(0, captureStart - 0.4), totalDur);
+  if (!ok || !existsSync(mp4)) {
+    console.warn(`Flow "${flow.name}": mp4 conversion failed; falling back.`);
+    return null;
+  }
+  console.log(`Flow "${flow.name}": recorded ${acted} step(s), ${(totalDur - captureStart).toFixed(1)}s.`);
+  return { type: 'video', file: mp4, note: `screen recording of the "${flow.name}" flow on ${startUrl}` };
+}
+
 // Best-effort list of files that define routes/pages in the consumer repo, so
 // the model can find where a changed component actually renders when the
 // first screenshot round misses.
@@ -1558,6 +1880,13 @@ async function main() {
   // interaction in recorded clips (on by default). Purely presentational —
   // off, recordings behave exactly as before.
   const ZOOM_CAMERA = envBool('ZOOM_CAMERA', config.zoomCamera ?? true);
+
+  // Scripted flows: owner-defined, natural-language product flows (config.json
+  // "flows"). A video-capture change matching a flow (by navTarget/paths) is
+  // recorded by walking the flow's steps with Gemini + the click-following
+  // camera, instead of the vision loop picking one interaction. Empty by
+  // default — no flows means the autonomous recorder is used, unchanged.
+  const FLOWS = Array.isArray(config.flows) ? config.flows : [];
 
   // A push can bundle several distinct changes (one feature at a time is the
   // common case and still gets exactly one image); this caps how many get
@@ -1844,10 +2173,23 @@ ${wantRoutes ? `      "candidate_paths": string[],  // 1 to 3 URL paths most lik
           // recordInteractionVideo returns null (no ffmpeg, nav miss, unverified,
           // any error) to hand off to the normal image pipeline for this change.
           if (INTERACTIVE_SHOTS && INTERACTION_VIDEOS && change.capture === 'video') {
-            resolved = await recordInteractionVideo(browser, baseUrl, change, shared, tag).catch((err) => {
-              console.warn(`Change "${change.clause}": video capture errored (${err.message}); falling back to image.`);
-              return null;
-            });
+            // A matching owner-scripted flow wins: it records the whole product
+            // flow (Gemini walks the steps) with the click-following camera.
+            const flow = pickFlow(FLOWS, change);
+            if (flow) {
+              resolved = await recordScriptedFlow(browser, baseUrl, flow, shared, tag).catch((err) => {
+                console.warn(`Change "${change.clause}": scripted flow "${flow.name}" errored (${err.message}); falling back.`);
+                return null;
+              });
+            }
+            // No flow, or the flow couldn't produce a clip: the autonomous
+            // single-interaction recorder is the fallback (then a still).
+            if (!resolved) {
+              resolved = await recordInteractionVideo(browser, baseUrl, change, shared, tag).catch((err) => {
+                console.warn(`Change "${change.clause}": video capture errored (${err.message}); falling back to image.`);
+                return null;
+              });
+            }
           }
           if (!resolved) {
             const img = await resolveChangeImage(ctx, baseUrl, REPO_ROOT, change, shared, tag);
