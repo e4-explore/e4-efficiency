@@ -6,3 +6,25 @@ compatibility_date = "2026-08-05"
 # Dev: the Pages dev server on :8788. Prod: the Cloudflare Pages domain.
 [vars]
 ALLOWED_ORIGINS = "http://localhost:8788,https://post-scorer-web.pages.dev"
+
+# Deferred-post queue for the auto-poster. Create the namespace once with:
+#   wrangler kv namespace create PENDING
+# then paste the returned id below (and repeat with `--preview` for local dev).
+[[kv_namespaces]]
+binding = "PENDING"
+id = "PLACEHOLDER_RUN_WRANGLER_KV_NAMESPACE_CREATE_PENDING"
+# preview_id = "PLACEHOLDER_FROM_wrangler_kv_namespace_create_PENDING_--preview"
+
+# Cron trigger: fires deferred posts whose run_at has arrived. 5-min cadence
+# matches the scheduler's 2-min post-inside-window buffer (worst-case delay
+# from a deferral firing to the tweet landing is ~7 min, well within a
+# 60-min audience window).
+[triggers]
+crons = ["*/5 * * * *"]
+
+# Secrets (set via `wrangler secret put <NAME>`, one at a time):
+#   ENQUEUE_TOKEN          — shared with the auto-post action's worker-enqueue-token
+#   X_API_KEY              — same value as the GH secret
+#   X_API_SECRET
+#   X_ACCESS_TOKEN
+#   X_ACCESS_TOKEN_SECRET

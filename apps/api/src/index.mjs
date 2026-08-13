@@ -4,6 +4,7 @@ import { json, error, corsHeaders } from './http.mjs';
 import { VERSION } from '../../../packages/scorer/src/index.mjs';
 import { handleScore } from './score.mjs';
 import { createRateLimiter } from './ratelimit.mjs';
+import { handleEnqueue, fireDue } from './pending.mjs';
 
 const limiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 
@@ -39,6 +40,21 @@ export default {
       return error('NOT_AVAILABLE', 'The pro tier is not available yet.', { status: 501, origin, env });
     }
 
+    // Deferred-post queue. Auth via `Authorization: Bearer <ENQUEUE_TOKEN>`.
+    // No CORS allowlist — this is a server-to-server call from the auto-post
+    // action, not a browser flow.
+    if (pathname === '/api/v1/pending') {
+      if (request.method !== 'POST') return error('METHOD_NOT_ALLOWED', 'Use POST.', { status: 405, origin, env });
+      return handleEnqueue(request, env, origin);
+    }
+
     return error('NOT_FOUND', 'Unknown route.', { status: 404, origin, env });
+  },
+
+  // Cron trigger: */5 * * * * (see wrangler.toml). Fires deferred posts whose
+  // run_at has arrived. Wrapped in waitUntil so the response returns immediately
+  // while KV work continues.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(fireDue(env));
   },
 };
