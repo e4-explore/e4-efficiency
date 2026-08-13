@@ -1,5 +1,5 @@
 {
-  "_comment": "Rename to config.json to activate (vendored mode only — the referenced action takes these as inputs instead). `preview` builds & serves the pushed code in CI so screenshots match the commit exactly (no deployed URL needed); omit it to screenshot the deployed homepage. `routes` hints Gemini toward real pages worth screenshotting. `includeCommitLink` appends the commit URL to the post (default false).",
+  "_comment": "Rename to config.json to activate (vendored mode only — the referenced action takes these as inputs instead). `preview` builds & serves the pushed code in CI so screenshots match the commit exactly (no deployed URL needed); omit it to screenshot the deployed homepage. `routes` hints Gemini toward real pages worth screenshotting. `includeCommitLink` appends the commit URL to the post (default false). `flows` are optional owner-scripted product flows — see `_flows_comment`.",
   "preview": {
     "command": "npm ci && npm run build && npx serve -l 4173 dist",
     "port": 4173,
@@ -7,5 +7,20 @@
     "timeoutSeconds": 180
   },
   "routes": ["/", "/example", "/example/nested"],
-  "includeCommitLink": false
+  "includeCommitLink": false,
+  "_flows_comment": "Optional. When a merge's change is an interaction (capture:video) AND matches a flow (by `match.navTarget` substring of the detected component, or `match.paths` globs against the change's files), the poster records that whole flow instead of guessing one interaction: Gemini performs each natural-language step and the click-following camera zooms on every click and pans to the next. `url` is the start path; `payoff` is an optional final punch-in on the result. Remove this block if you don't use flows.",
+  "flows": [
+    {
+      "name": "score a post",
+      "match": { "navTarget": "scorer", "paths": ["src/scorer/**"] },
+      "url": "/",
+      "steps": [
+        "type a short, punchy sample X post into the draft field",
+        "click the media tab",
+        "choose the video option",
+        "press enter to score it"
+      ],
+      "payoff": "the score result"
+    }
+  ]
 }
