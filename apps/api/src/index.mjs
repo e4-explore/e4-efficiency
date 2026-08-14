@@ -3,6 +3,7 @@
 import { json, error, corsHeaders } from './http.mjs';
 import { VERSION } from '../../../packages/scorer/src/index.mjs';
 import { handleScore } from './score.mjs';
+import { handlePro } from './pro.mjs';
 import { createRateLimiter } from './ratelimit.mjs';
 import { handleEnqueue, fireDue } from './pending.mjs';
 
@@ -33,11 +34,19 @@ export default {
     }
 
     if (pathname.startsWith('/api/v1/pro/')) {
-      // Paid tier — not available this phase. Auth seam reserved: when accounts +
-      // Stripe land, these routes read `Authorization: Bearer <token>` and return
-      // UNAUTHENTICATED / UNLICENSED, then import @e4/post-scorer-pro server-side.
+      // Paid tools: /pro/fixes (written fixes) and /pro/optimize (auto-rewrite).
+      // Gated by `Authorization: Bearer <license-key>` (verified in handlePro).
+      // The grade itself is free — see /api/v1/score. Rate-limited like /score
+      // since each call can fan out to several LLM round-trips.
       if (request.method !== 'POST') return error('METHOD_NOT_ALLOWED', 'Use POST.', { status: 405, origin, env });
-      return error('NOT_AVAILABLE', 'The pro tier is not available yet.', { status: 501, origin, env });
+      const action = pathname.slice('/api/v1/pro/'.length);
+      if (action !== 'fixes' && action !== 'optimize') return error('NOT_FOUND', 'Unknown route.', { status: 404, origin, env });
+      const ip = request.headers.get('cf-connecting-ip') || 'unknown';
+      const rl = limiter.check(ip);
+      if (!rl.allowed) {
+        return error('RATE_LIMITED', 'Too many requests.', { status: 429, origin, env, headers: { 'Retry-After': String(rl.retryAfter) } });
+      }
+      return handlePro(request, env, origin, action);
     }
 
     // Deferred-post queue. Auth via `Authorization: Bearer <ENQUEUE_TOKEN>`.

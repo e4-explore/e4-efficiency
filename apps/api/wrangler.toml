@@ -1,6 +1,11 @@
 name = "post-scorer-api"
 main = "src/index.mjs"
 compatibility_date = "2026-08-05"
+# nodejs_compat: the scorer-pro package (bundled server-side for LLM grading +
+# the pro tools) imports `node:crypto` and uses `Buffer`. License verification
+# in the Worker uses WebCrypto (runtime-native), but the import graph still needs
+# node built-ins resolvable.
+compatibility_flags = ["nodejs_compat"]
 
 # Public UI origins allowed to call the API (CORS allowlist), comma-separated.
 # Dev: the Pages dev server on :8788. Prod: the Cloudflare Pages domain.
@@ -23,8 +28,15 @@ id = "PLACEHOLDER_RUN_WRANGLER_KV_NAMESPACE_CREATE_PENDING"
 crons = ["*/5 * * * *"]
 
 # Secrets (set via `wrangler secret put <NAME>`, one at a time):
+#   GEMINI_API_KEY         — powers LLM grading for ALL users + the pro tools.
+#                            OPTIONAL: without it, /score returns the deterministic
+#                            heuristic grade and /pro/optimize reports no-llm. Set
+#                            it to make every grade LLM-accurate.
 #   ENQUEUE_TOKEN          — shared with the auto-post action's worker-enqueue-token
 #   X_API_KEY              — same value as the GH secret
 #   X_API_SECRET
 #   X_ACCESS_TOKEN
 #   X_ACCESS_TOKEN_SECRET
+#
+# Optional var: GEMINI_MODEL — override the first model tried (defaults to the
+# verified fallback list in @e4/post-scorer-pro). Set under [vars] or as a secret.

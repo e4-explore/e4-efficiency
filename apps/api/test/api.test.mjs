@@ -5,6 +5,11 @@ import worker from '../src/index.mjs';
 const ORIGIN = 'https://scorer.example';
 const env = { ALLOWED_ORIGINS: ORIGIN };
 
+// A valid pro license signed by the embedded production key (same one the
+// scorer-pro tests use). No GEMINI_API_KEY in `env`, so the pro handlers run
+// deterministically (no network) — enough to exercise the auth gate + shapes.
+const DEV_LICENSE = 'v1.eyJzdWIiOiJlNC1leHBsb3JlLW93bmVyIiwicGxhbiI6InBybyIsImlhdCI6MTc4NTczNzAwMX0.H_mfGyUmZa5lbHrOeXJGwAsKkouGETviQ6Ym3tzGsR4X44pa-rRinIWvxWtuBiphSEPFBWw4aCYuj22y1mRJDA';
+
 export function req(path, { method = 'GET', body, origin = ORIGIN, headers = {} } = {}) {
   const h = { origin, ...headers };
   let payload;
@@ -83,13 +88,51 @@ test('score rejects GET with 405', async () => {
   assert.equal(res.status, 405);
 });
 
-test('pro route returns 501 NOT_AVAILABLE', async () => {
-  const res = await worker.fetch(req('/api/v1/pro/optimize', { method: 'POST', body: { text: 'hi' } }), env);
-  assert.equal(res.status, 501);
-  assert.equal((await res.json()).code, 'NOT_AVAILABLE');
-});
-
 test('pro route rejects GET with 405', async () => {
   const res = await worker.fetch(req('/api/v1/pro/optimize', { method: 'GET' }), env);
   assert.equal(res.status, 405);
+});
+
+test('unknown pro action returns 404', async () => {
+  const res = await worker.fetch(req('/api/v1/pro/bogus', { method: 'POST', body: { text: 'hi' } }), env);
+  assert.equal(res.status, 404);
+});
+
+test('pro/fixes without a license returns 401 UNAUTHENTICATED', async () => {
+  const res = await worker.fetch(req('/api/v1/pro/fixes', { method: 'POST', body: { text: 'we shipped a dashboard' } }), env);
+  assert.equal(res.status, 401);
+  assert.equal((await res.json()).code, 'UNAUTHENTICATED');
+});
+
+test('pro/fixes with an invalid license returns 401 UNLICENSED', async () => {
+  const res = await worker.fetch(
+    req('/api/v1/pro/fixes', { method: 'POST', body: { text: 'we shipped a dashboard' }, headers: { authorization: 'Bearer garbage' } }),
+    env,
+  );
+  assert.equal(res.status, 401);
+  assert.equal((await res.json()).code, 'UNLICENSED');
+});
+
+test('pro/fixes with a valid license returns written suggestions', async () => {
+  const res = await worker.fetch(
+    req('/api/v1/pro/fixes', { method: 'POST', body: { text: 'we shipped a new dashboard today' }, headers: { authorization: `Bearer ${DEV_LICENSE}` } }),
+    env,
+  );
+  assert.equal(res.status, 200);
+  const j = await res.json();
+  assert.equal(j.tier, 'pro');
+  assert.ok(Array.isArray(j.suggestions) && j.suggestions.length > 0);
+  assert.ok(j.suggestions.every((s) => typeof s.text === 'string' && s.text.length));
+});
+
+test('pro/optimize with a valid license returns a best version', async () => {
+  const res = await worker.fetch(
+    req('/api/v1/pro/optimize', { method: 'POST', body: { text: 'we shipped a new dashboard today', maxIterations: 2 }, headers: { authorization: `Bearer ${DEV_LICENSE}` } }),
+    env,
+  );
+  assert.equal(res.status, 200);
+  const j = await res.json();
+  assert.equal(j.tier, 'pro');
+  assert.equal(typeof j.best.text, 'string');
+  assert.equal(j.reason, 'no-llm'); // no GEMINI key in test env → can't rewrite, returns the original as best
 });
