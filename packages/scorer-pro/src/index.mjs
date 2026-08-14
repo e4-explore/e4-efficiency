@@ -33,14 +33,8 @@ async function computeGrade(input, { llm } = {}) {
   return { base, notes, features, source, error };
 }
 
-// ---- FREE-EVERYWHERE grader (NO license) --------------------------------
-// The grade must be identical regardless of plan: an LLM-informed score,
-// subscores, named issues, and the one-line critique (diagnosis). What it
-// deliberately withholds is the WRITTEN fixes + the rewriter — those are the
-// paid tools below. Ungated on purpose; run it server-side with the operator's
-// key so every user (licensed or not) gets the same accurate number.
-export async function gradeWithLlm(input, { platform = 'x', llm } = {}) {
-  assertPlatform(platform);
+// Single-shot grade assembly.
+async function gradeOnce(input, { llm } = {}) {
   const { base, notes, features, source, error } = await computeGrade(input, { llm });
   return {
     ...base,
@@ -50,6 +44,27 @@ export async function gradeWithLlm(input, { platform = 'x', llm } = {}) {
     predictionSource: source,
     ...(error ? { predictionError: error } : {}),
   };
+}
+
+// ---- FREE-EVERYWHERE grader (NO license) --------------------------------
+// The grade must be identical regardless of plan: an LLM-informed score,
+// subscores, named issues, and the one-line critique (diagnosis). What it
+// deliberately withholds is the WRITTEN fixes + the rewriter — those are the
+// paid tools below. Ungated on purpose; run it server-side with the operator's
+// key so every user (licensed or not) gets the same accurate number.
+//
+// `samples` (>1) stabilizes the number: the score is Σ(weight × P(action)) and
+// the LLM's probability estimates jitter between calls, so a single sample can
+// swing the score tens of points on a borderline post. Sampling N times and
+// returning the median-BY-SCORE run gives a representative grade whose
+// subscores + critique all come from that one run (internally consistent).
+// Only meaningful with an llm — the deterministic path is already reproducible.
+export async function gradeWithLlm(input, { platform = 'x', llm, samples = 1 } = {}) {
+  assertPlatform(platform);
+  if (!llm || samples <= 1) return gradeOnce(input, { llm });
+  const runs = await Promise.all(Array.from({ length: samples }, () => gradeOnce(input, { llm })));
+  runs.sort((a, b) => a.score - b.score);
+  return runs[Math.floor((runs.length - 1) / 2)]; // lower-median on an even count
 }
 
 // ---- PAID cores (NO license check here) ---------------------------------

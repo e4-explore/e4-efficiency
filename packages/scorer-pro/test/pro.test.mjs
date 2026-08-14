@@ -65,6 +65,24 @@ test('optimizer keeps trying after a non-improving rewrite (patience)', async ()
   assert.equal(r.best.text, strong);
 });
 
+test('gradeWithLlm samples>1 returns the median-by-score run (stabilizer)', async () => {
+  // A stub whose returned like-probability (which drives the score) follows a
+  // fixed sequence, so we can predict which sample is the median.
+  const stubWithLikes = (likes) => {
+    let i = 0;
+    return async (prompt) => {
+      if (/Rewrite the post/.test(prompt)) return { post_text: 'x', rationale: 'r' };
+      const like = likes[Math.min(i++, likes.length - 1)];
+      return { probabilities: { like }, hookStrength: 0.6, clarity: 0.6, critique: 'c', suggestions: [] };
+    };
+  };
+  const scoreFor = async (like) => (await gradeWithLlm('a plain test post here', { llm: stubWithLikes([like]) })).score;
+  const s = [await scoreFor(0.05), await scoreFor(0.9), await scoreFor(0.4)];
+  const median = [...s].sort((a, b) => a - b)[1];
+  const r = await gradeWithLlm('a plain test post here', { llm: stubWithLikes([0.05, 0.9, 0.4]), samples: 3 });
+  assert.equal(r.score, median, `expected median ${median} of ${JSON.stringify(s)}, got ${r.score}`);
+});
+
 test('evaluatePro throws UNLICENSED without a key', async () => {
   delete process.env.POST_SCORER_LICENSE_KEY;
   await assert.rejects(() => evaluatePro('a draft', { llm: stubLlm }), (e) => e.code === 'UNLICENSED');
