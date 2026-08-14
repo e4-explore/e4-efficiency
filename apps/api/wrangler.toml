@@ -20,6 +20,14 @@ binding = "PENDING"
 id = "40ee3fc6ff4f4bdb893b11401a9a19e2"
 preview_id = "1bce0b5c10424f2eba4b638699023723"
 
+# Grade cache: same post → same LLM grade, returned to every caller (reproducible
+# + cheap). Keyed by a content hash; entries expire after 30 days. Optional — the
+# /score handler skips caching when this binding is absent.
+[[kv_namespaces]]
+binding = "GRADES"
+id = "1816315f77c1458f91f795b2bacd523a"
+preview_id = "61c72a4e1fcb479cb052d109c881c71b"
+
 # Cron trigger: fires deferred posts whose run_at has arrived. 5-min cadence
 # matches the scheduler's 2-min post-inside-window buffer (worst-case delay
 # from a deferral firing to the tweet landing is ~7 min, well within a

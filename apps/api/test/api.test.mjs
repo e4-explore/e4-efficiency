@@ -62,6 +62,30 @@ test('POST /api/v1/score returns the score shape for a real draft', async () => 
   assert.equal(res.headers.get('access-control-allow-origin'), ORIGIN);
 });
 
+test('score serves a cached grade when one exists (reproducibility)', async () => {
+  const { gradeCacheKey } = await import('../src/score.mjs');
+  const store = new Map();
+  const kv = { get: async (k) => store.get(k) ?? null, put: async (k, v) => void store.set(k, v) };
+  const cenv = { ALLOWED_ORIGINS: ORIGIN, GRADES: kv };
+  const input = { text: 'a specific post to cache', hasMedia: false, mediaType: null, hasLinkInReply: false };
+  // Pre-seed the cache with a sentinel payload under the exact key the handler computes.
+  const key = await gradeCacheKey(input);
+  store.set(key, JSON.stringify({ score: 777, subscores: {}, issues: [], critique: 'cached', fixesAvailable: 0, tier: 'free', predictionSource: 'hybrid', version: 'x' }));
+  const res = await worker.fetch(req('/api/v1/score', { method: 'POST', body: { text: input.text } }), cenv);
+  assert.equal(res.status, 200);
+  const j = await res.json();
+  assert.equal(j.score, 777, 'returned the cached grade');
+  assert.equal(j.critique, 'cached');
+});
+
+test('gradeCacheKey is stable for the same input and differs for different input', async () => {
+  const { gradeCacheKey } = await import('../src/score.mjs');
+  const a = { text: 'hello world', hasMedia: false, mediaType: null, hasLinkInReply: false };
+  const b = { text: 'hello world', hasMedia: true, mediaType: 'video', hasLinkInReply: false };
+  assert.equal(await gradeCacheKey(a), await gradeCacheKey(a));
+  assert.notEqual(await gradeCacheKey(a), await gradeCacheKey(b));
+});
+
 test('score rejects empty text with 400', async () => {
   const res = await worker.fetch(req('/api/v1/score', { method: 'POST', body: { text: '  ' } }), env);
   assert.equal(res.status, 400);
