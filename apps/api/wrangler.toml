@@ -17,8 +17,8 @@ ALLOWED_ORIGINS = "http://localhost:8788,https://post-scorer-web.pages.dev"
 # then paste the returned id below (and repeat with `--preview` for local dev).
 [[kv_namespaces]]
 binding = "PENDING"
-id = "PLACEHOLDER_RUN_WRANGLER_KV_NAMESPACE_CREATE_PENDING"
-# preview_id = "PLACEHOLDER_FROM_wrangler_kv_namespace_create_PENDING_--preview"
+id = "40ee3fc6ff4f4bdb893b11401a9a19e2"
+preview_id = "1bce0b5c10424f2eba4b638699023723"
 
 # Cron trigger: fires deferred posts whose run_at has arrived. 5-min cadence
 # matches the scheduler's 2-min post-inside-window buffer (worst-case delay
