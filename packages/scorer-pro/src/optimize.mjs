@@ -48,7 +48,10 @@ Return ONLY JSON: { "post_text": string, "rationale": string }`;
 //     constraints  string   voice/brand rules the rewrite must respect
 //     targetScore  number   stop once reached (default 85)
 //     maxIterations number  rewrite attempts (default 3)
-//     minGain      number   stop if an attempt gains less than this (default 1)
+//     minGain      number   an attempt must beat best by this to count (default 1)
+//     patience     number   stop after this many consecutive non-improving
+//                           attempts (default 3). Rewrites are stochastic, so one
+//                           weak draft is not a reason to quit — retry from best.
 export async function optimizePost(input, {
   evaluate,
   llm,
@@ -56,6 +59,7 @@ export async function optimizePost(input, {
   targetScore = 85,
   maxIterations = 3,
   minGain = 1,
+  patience = 3,
 } = {}) {
   if (typeof evaluate !== 'function') throw new Error('optimizePost requires an `evaluate` function.');
 
@@ -71,6 +75,7 @@ export async function optimizePost(input, {
   }
 
   let reason = 'max-iterations';
+  let misses = 0; // consecutive attempts that didn't beat best by minGain
   for (let i = 1; i <= maxIterations; i++) {
     if (best.evaluation.score >= targetScore) { reason = 'target-reached'; break; }
 
@@ -82,7 +87,13 @@ export async function optimizePost(input, {
       reason = `rewrite-error: ${err?.message || err}`;
       break;
     }
-    if (!rewritten || rewritten === best.text) { reason = 'no-change'; break; }
+    // An empty or identical draft is a wasted attempt, not a reason to quit —
+    // temperature makes the next rewrite (from the same best) different. Count
+    // it toward patience and try again.
+    if (!rewritten || rewritten === best.text) {
+      if (++misses >= patience) { reason = 'plateau'; break; }
+      continue;
+    }
 
     const candidate = { ...base, text: rewritten };
     const candEval = await evaluate(candidate, { llm });
@@ -90,7 +101,11 @@ export async function optimizePost(input, {
     trace.push({ iteration: i, text: rewritten, score: candEval.score, subscores: candEval.subscores, critique: candEval.critique, gain });
 
     if (candEval.score > best.evaluation.score) best = { text: rewritten, evaluation: candEval };
-    if (gain < minGain) { reason = 'plateau'; break; }
+    // Only give up after `patience` consecutive misses — a single non-improving
+    // stochastic rewrite used to kill the whole run and strand the optimizer on
+    // the original. A real gain resets the counter.
+    if (gain >= minGain) misses = 0;
+    else if (++misses >= patience) { reason = 'plateau'; break; }
   }
 
   return {

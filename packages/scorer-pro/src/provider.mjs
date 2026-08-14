@@ -46,6 +46,48 @@ export function fromOpenAICompatible(create, { model = 'grok-2-latest', maxToken
   };
 }
 
+// Currently generate-capable Gemini models, cheap → more capable. Verified
+// against :generateContent (not the models.list catalog, which lists ids that
+// 404 for newer accounts). The adapter skips any that 404, so a stale entry
+// degrades instead of breaking — but keep this list current.
+const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-flash-lite-latest', 'gemini-3.5-flash'];
+
+// Build a Gemini adapter from a raw API key. Used by the Pro CLI (Node) and the
+// API Worker (workerd) alike — both have global `fetch`, so this stays runtime
+// -agnostic and is the single place the model list / token budget live.
+//
+//   const llm = fromGeminiKey(key, { model: env.GEMINI_MODEL });
+//   await llm(prompt, { temperature: 0.1 });  // per-call temperature
+//
+// `model` (optional) is tried first, then the verified fallback list. Honors a
+// per-call `temperature` (scoring runs cool, rewriting warm). maxOutputTokens is
+// 8192 so thinking models have room to reason AND emit the JSON — at 2048 they
+// intermittently truncate (MAX_TOKENS) and the reply won't parse.
+export function fromGeminiKey(key, { model } = {}) {
+  const models = [model, ...GEMINI_MODELS].filter(Boolean);
+  return async (prompt, { temperature = 0.6 } = {}) => {
+    let lastErr = '';
+    for (const m of models) {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${encodeURIComponent(key)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            generationConfig: { responseMimeType: 'application/json', temperature, maxOutputTokens: 8192 },
+          }),
+        },
+      );
+      if (!res.ok) { lastErr = `${res.status} ${await res.text()}`; continue; }
+      const body = await res.json();
+      const text = body?.candidates?.[0]?.content?.parts?.map((p) => p.text).filter(Boolean).join('');
+      if (text) return JSON.parse(extractFirstJsonObject(text));
+    }
+    throw new Error(`Gemini call failed: ${lastErr}`);
+  };
+}
+
 // Tolerant JSON extraction: pull the first balanced {...} out of a reply that
 // may have prose or code fences around it. (Mirrors the poster's own helper so
 // this package stays dependency-free.)

@@ -7,7 +7,7 @@
 
 import { readFileSync } from 'node:fs';
 import { evaluatePro, optimizePost } from '../src/index.mjs';
-import { extractFirstJsonObject } from '../src/provider.mjs';
+import { fromGeminiKey } from '../src/provider.mjs';
 
 function parseArgs(argv) {
   const o = { platform: 'x', media: 'none', json: false, optimize: false, target: 85, iterations: 3, linkInReply: false };
@@ -26,39 +26,9 @@ function parseArgs(argv) {
   return o;
 }
 
-function geminiAdapter(key) {
-  // Try GEMINI_MODEL first if set, then fall through a list of currently
-  // generate-capable models (cheap → more capable). Google rotates model
-  // availability and some ids 404 for newer accounts even while they still
-  // appear in the models.list endpoint, so this list is verified against
-  // :generateContent, not the catalog. The loop below skips any that 404, so
-  // a stale entry degrades instead of breaking — but keep this list current.
-  const models = [process.env.GEMINI_MODEL, 'gemini-2.5-flash', 'gemini-flash-lite-latest', 'gemini-3.5-flash'].filter(Boolean);
-  // Per-call `temperature`: the scoring pass asks for a cool value (reproducible
-  // grades) and the rewrite pass a warm one (varied drafts). Default 0.6 for any
-  // direct caller that doesn't specify.
-  return async (prompt, { temperature = 0.6 } = {}) => {
-    let lastErr = '';
-    for (const model of models) {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
-        // maxOutputTokens must cover the model's hidden "thinking" tokens PLUS
-        // the JSON payload. At 2048 the 2.5/3.x thinking models intermittently
-        // spend the whole budget reasoning and return truncated (finishReason
-        // MAX_TOKENS) or empty text, which surfaced here as "Unbalanced JSON
-        // object in model reply" / silent fallback to heuristics-only. 8192
-        // gives enough headroom to finish thinking and still emit the object.
-        // (Not using thinkingConfig:{thinkingBudget:0} — some models 400 on it.)
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature, maxOutputTokens: 8192 } }) },
-      );
-      if (!res.ok) { lastErr = `${res.status} ${await res.text()}`; continue; }
-      const body = await res.json();
-      const text = body?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (text) return JSON.parse(extractFirstJsonObject(text));
-    }
-    throw new Error(`Gemini call failed: ${lastErr}`);
-  };
-}
+// The Gemini adapter (model fallback list, token budget, per-call temperature)
+// lives in provider.mjs so the CLI and the API Worker share one implementation.
+const geminiAdapter = (key) => fromGeminiKey(key, { model: process.env.GEMINI_MODEL });
 
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 const bar = (n) => `${'█'.repeat(Math.round(clamp(n, 0, 100) / 10))}${'░'.repeat(10 - Math.round(clamp(n, 0, 100) / 10))} ${String(n).padStart(3)}`;

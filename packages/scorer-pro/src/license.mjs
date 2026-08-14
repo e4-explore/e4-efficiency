@@ -56,6 +56,44 @@ export function verifyLicenseKey(key) {
   return { valid: true, plan: payload.plan || 'pro', sub: payload.sub };
 }
 
+// Worker-safe verification. The sync `verifyLicenseKey` above uses node:crypto,
+// which the Cloudflare Worker can't rely on; this variant uses WebCrypto
+// (globalThis.crypto.subtle), which both Node 20+ and workerd support natively
+// with the same embedded Ed25519 public key. Returns the same shape as the sync
+// version. Use this on the server; the CLI keeps the sync path.
+export async function verifyLicenseKeyWebCrypto(key) {
+  if (!key || typeof key !== 'string') return { valid: false, reason: 'missing' };
+  const parts = key.trim().split('.');
+  if (parts.length !== 3 || parts[0] !== 'v1') return { valid: false, reason: 'malformed' };
+  const [, payloadB64, sigB64] = parts;
+
+  let ok = false;
+  try {
+    const pub = await crypto.subtle.importKey(
+      'spki',
+      Buffer.from(PUBLIC_KEY_DER_B64, 'base64'),
+      { name: 'Ed25519' },
+      false,
+      ['verify'],
+    );
+    ok = await crypto.subtle.verify({ name: 'Ed25519' }, pub, b64urlToBuf(sigB64), Buffer.from(payloadB64));
+  } catch {
+    return { valid: false, reason: 'bad-signature' };
+  }
+  if (!ok) return { valid: false, reason: 'bad-signature' };
+
+  let payload;
+  try {
+    payload = JSON.parse(b64urlToBuf(payloadB64).toString('utf8'));
+  } catch {
+    return { valid: false, reason: 'bad-payload' };
+  }
+  if (payload.exp && Date.now() / 1000 > payload.exp) {
+    return { valid: false, reason: 'expired', plan: payload.plan, sub: payload.sub };
+  }
+  return { valid: true, plan: payload.plan || 'pro', sub: payload.sub };
+}
+
 // Resolve the key from an explicit value or the standard env var.
 export function resolveLicenseKey(explicit) {
   return explicit || process.env.POST_SCORER_LICENSE_KEY || '';

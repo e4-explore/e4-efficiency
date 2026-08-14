@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluatePro, optimizePost, verifyLicenseKey } from '../src/index.mjs';
+import { evaluatePro, optimizePost, gradeWithLlm, verifyLicenseKey } from '../src/index.mjs';
 
 // A license signed by the embedded PRODUCTION public key. In real use this comes
 // from POST_SCORER_LICENSE_KEY. If the key is rotated, re-sign with
@@ -23,6 +23,46 @@ test('a tampered license fails', () => {
   assert.equal(verifyLicenseKey(DEV_LICENSE.slice(0, -4) + 'AAAA').valid, false);
   assert.equal(verifyLicenseKey('').valid, false);
   assert.equal(verifyLicenseKey('garbage').valid, false);
+});
+
+test('gradeWithLlm returns an LLM grade with NO license, and withholds written fixes', async () => {
+  delete process.env.POST_SCORER_LICENSE_KEY;
+  const r = await gradeWithLlm('we updated the onboarding flow to make it faster', { llm: stubLlm });
+  assert.equal(r.tier, 'free');
+  assert.equal(r.predictionSource, 'hybrid'); // the SAME LLM grade paid users get
+  assert.equal(typeof r.score, 'number');
+  assert.equal(typeof r.subscores.hook, 'number');
+  assert.equal(r.critique, 'lead with the number'); // critique (diagnosis) is free
+  assert.equal(r.suggestions, undefined); // written fixes are NOT free
+});
+
+test('gradeWithLlm works with no llm (deterministic, still ungated)', async () => {
+  const r = await gradeWithLlm('a plain post with no question in it at all');
+  assert.equal(r.predictionSource, 'features');
+  assert.equal(typeof r.score, 'number');
+  assert.equal(r.suggestions, undefined);
+});
+
+test('optimizer keeps trying after a non-improving rewrite (patience)', async () => {
+  let n = 0;
+  const strong = 'what should i automate next? tell me your worst task.';
+  const llm = async (prompt) => {
+    if (/Rewrite the post/.test(prompt)) {
+      n += 1;
+      // First draft is deliberately weak (long, crammed, no question → lower
+      // score); the second is strong. Pre-fix, the loop quit after the first
+      // miss and never reached the winning draft.
+      return { post_text: n === 1 ? `marketing update ${'x'.repeat(240)}` : strong, rationale: 'r' };
+    }
+    return { probabilities: { like: 0.2, reply: 0.1 }, hookStrength: 0.7, clarity: 0.7, critique: 'weak', suggestions: [] };
+  };
+  const r = await optimizePost(
+    { text: 'we shipped onboarding improvements today', hasMedia: false, mediaType: null },
+    { llm, licenseKey: DEV_LICENSE, targetScore: 100, maxIterations: 2, minGain: 1, patience: 3 },
+  );
+  assert.equal(n, 2, 'made a second rewrite attempt instead of bailing on the first miss');
+  assert.ok(r.improved, 'captured the later improving rewrite');
+  assert.equal(r.best.text, strong);
 });
 
 test('evaluatePro throws UNLICENSED without a key', async () => {
