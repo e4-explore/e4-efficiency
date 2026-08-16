@@ -95,6 +95,7 @@ Voice rules (follow strictly):
 - Write like a person talking, not a marketer or a changelog. Casual, plain, direct. Contractions are good (it's, you're, doesn't).
 - Never use "we", "our", or "I" as the subject. Never open with a changelog verb: no "Added/Fixed/Updated/Renamed/Improved/Introduced X" (with OR without a following "so Y"), and never "Added the ability to/for X". Those narrate the act of shipping instead of stating the idea. Lead with what the thing does or lets someone do (e.g. "Icons now change with the theme, not just the colors" rather than "Added different icon packs per theme").
 - Never the changelog pattern "X now does Y to reflect Z".
+- Assume the reader has never heard of this project. Give just enough that a stranger can tell what it is and why the change matters, still in one casual sentence. Never bolt on a boilerplate "In [Product]," label to do it, let the orientation live inside the sentence.
 
 Do NOT write like AI. Specifically:
 - No em dashes or en dashes (the "—" or "–" characters) anywhere. Use a comma, a period, or reword the sentence. This is the single most important rule.
@@ -198,6 +199,109 @@ export function lintVoice(text) {
   if (hashtags > 1) violations.push({ rule: 'hashtags', detail: String(hashtags) });
   if (t.length > 280) violations.push({ rule: 'over-length', detail: String(t.length) });
   return violations;
+}
+
+// ---------------------------------------------------------------- project context (exported pure helpers for tests)
+
+// How long the "what this project is" blurb fed into the prompts may get. Kept
+// short so it orients without bloating the prompt or drowning the change itself.
+const PROJECT_CONTEXT_CAP = 300;
+
+const collapseWs = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+const ensureStop = (s) => (/[.!?]$/.test(s) ? s : `${s}.`);
+// Two blurbs are "the same" if either starts with the other's first ~40 chars —
+// enough to catch a README intro that just restates the repo description.
+function sameGist(a, b) {
+  if (!a || !b) return false;
+  const la = a.toLowerCase();
+  const lb = b.toLowerCase();
+  return la.includes(lb.slice(0, 40)) || lb.includes(la.slice(0, 40));
+}
+function truncateContext(s, cap = PROJECT_CONTEXT_CAP) {
+  const t = collapseWs(s);
+  if (t.length <= cap) return t;
+  const cut = t.slice(0, cap - 1);
+  const sp = cut.lastIndexOf(' ');
+  const base = sp > cap * 0.6 ? cut.slice(0, sp) : cut;
+  return `${base.replace(/[\s.,;:]+$/, '')}…`;
+}
+
+// Pull the first real prose paragraph out of a README's markdown — past the
+// title, badge/shield rows, logo blocks, HTML comments, and code fences. This
+// is the auto-derived "what is this project" fallback when the owner hasn't set
+// one. Returns '' when the README is all chrome and no prose.
+export function readmeIntro(markdown) {
+  const md = String(markdown || '').replace(/<!--[\s\S]*?-->/g, '');
+  for (const raw of md.split(/\n\s*\n/)) {
+    const block = raw.trim();
+    if (!block || block.startsWith('```')) continue; // skip blanks + code fences
+    const t = block
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, '')   // markdown images
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // links -> their text
+      .replace(/<[^>]+>/g, ' ')                // html tags
+      .replace(/^[>\s]*#{1,6}\s.*$/gm, '')     // heading lines (incl. blockquoted)
+      .replace(/[`*_~]+/g, '')                 // emphasis / backticks
+      .replace(/\s+/g, ' ')
+      .trim();
+    // Real prose only: not a leftover heading, has a space, some letters, and
+    // enough length that a badge row or bare title doesn't sneak through.
+    if (!t || /^#{1,6}\s/.test(t) || t.length < 15 || !/\s/.test(t) || !/[a-zA-Z]/.test(t)) continue;
+    return t;
+  }
+  return '';
+}
+
+// Compose the final project-context blurb from its available pieces, in priority
+// order (repo description first — it's the owner's own one-liner — then the
+// README intro if it adds anything, then the homepage as a trailing note).
+// Truncated to `cap`. Deterministic and network-free so it's unit-testable.
+export function composeProjectContext({ description = '', readmeIntro: intro = '', homepage = '' } = {}, cap = PROJECT_CONTEXT_CAP) {
+  const desc = collapseWs(description);
+  const rd = collapseWs(intro);
+  const home = collapseWs(homepage);
+  const parts = [];
+  if (desc) parts.push(ensureStop(desc));
+  if (rd && !sameGist(rd, desc)) parts.push(ensureStop(rd));
+  let text = parts.join(' ');
+  if (home && !text.includes(home)) text = text ? `${text} Site: ${home}` : `Site: ${home}`;
+  return truncateContext(text, cap);
+}
+
+// Resolve a short, stable "what this project is" blurb to ground the post copy.
+// Owner-authored wins (PROJECT_CONTEXT env / config.projectContext, used
+// verbatim); otherwise auto-derive from the repo description + homepage + README
+// intro. Best-effort throughout — every fetch is guarded and any failure just
+// drops that source, so the worst case reproduces today's behavior (no blurb).
+async function resolveProjectContext({ config, repo, ghHeaders }) {
+  const owner = collapseWs(process.env.PROJECT_CONTEXT || (typeof config.projectContext === 'string' ? config.projectContext : ''));
+  if (owner) return truncateContext(owner);
+
+  let description = '';
+  let homepage = '';
+  let intro = '';
+  try {
+    const r = await fetch(`https://api.github.com/repos/${repo}`, { headers: ghHeaders });
+    if (r.ok) {
+      const j = await r.json();
+      description = j.description || '';
+      homepage = j.homepage || '';
+    }
+  } catch (err) {
+    console.warn(`Project-context repo fetch failed: ${err.message}`);
+  }
+  try {
+    const r = await fetch(`https://api.github.com/repos/${repo}/readme`, { headers: ghHeaders });
+    if (r.ok) {
+      const j = await r.json();
+      if (j && j.content) {
+        const md = Buffer.from(j.content, j.encoding === 'base64' ? 'base64' : 'utf8').toString('utf8');
+        intro = readmeIntro(md);
+      }
+    }
+  } catch (err) {
+    console.warn(`Project-context README fetch failed: ${err.message}`);
+  }
+  return composeProjectContext({ description, readmeIntro: intro, homepage });
 }
 
 function envBool(name, fallback) {
@@ -2024,6 +2128,15 @@ async function main() {
 
   const history = loadHistory(HISTORY_PATH);
 
+  // Stable "what this project is" blurb so every post orients a first-time
+  // reader (owner-authored, else auto-derived from repo/README). Best-effort:
+  // '' just reproduces the old behavior.
+  const projectContext = await resolveProjectContext({ config, repo: GITHUB_REPOSITORY, ghHeaders });
+  console.log(`Project context: ${projectContext ? projectContext.slice(0, 120) : '(none)'}`);
+  const projectContextBlock = projectContext
+    ? `- What this project is: ${projectContext}\n  Use this to orient a reader who has never seen the project so each post makes sense on its own. Let it inform natural phrasing, do NOT paste it in verbatim or prefix a post with "In <project>...".\n`
+    : '';
+
   // ---- 2. segment into 1-4 distinct changes + draft each ----
 
   const routesHint = Array.isArray(routes) && routes.length
@@ -2047,7 +2160,7 @@ giving it its own.
 
 PROJECT
 - Repo: ${GITHUB_REPOSITORY}${routesHint}
-${USE_COVER ? '- Image: a static cover image already chosen by the project owner will be attached (same image regardless of how many changes are found).' : '- A screenshot — or, for an interaction/motion change, a short screen recording — of the app will be captured per change; you choose which routes to try for each and mark which changes are interactions (capture: "video").'}
+${projectContextBlock}${USE_COVER ? '- Image: a static cover image already chosen by the project owner will be attached (same image regardless of how many changes are found).' : '- A screenshot — or, for an interaction/motion change, a short screen recording — of the app will be captured per change; you choose which routes to try for each and mark which changes are interactions (capture: "video").'}
 
 COMMIT
 - Message: ${commitMessage}
@@ -2244,7 +2357,7 @@ You are the editor. Improve the draft below so it scores as high as possible on 
 Sanity-check visibility, not just engagement: X decides whether a post is shown at all (visibility filtering) separately from how it ranks, and out-of-network recommendations are dropped entirely for anything that trips a spam / "Do Not Amplify" / misleading label. Keep the draft clean of misleading claims, manufactured controversy, and engagement-farming. A safe, substantive post a stranger would forward beats a spicy one that risks being suppressed.
 
 Before returning, reread the draft and strip anything that reads as AI-written: em/en dashes, the "feature — benefit" appendage, rule-of-three lists, and the banned tell-words in the voice rules. Rewrite those spots in plain, casual, human phrasing rather than just deleting the punctuation.
-${historyBlock}${prBlock}
+${historyBlock}${prBlock}${projectContext ? `\nWHAT THIS PROJECT IS (assume the reader has never heard of it, keep enough orientation that the post stands alone, do NOT prepend it as a label): ${projectContext}\n` : ''}
 DRAFT: ${postText}
 COMMIT MESSAGE: ${commitMessage}
 ${imagesBlock}
@@ -2285,11 +2398,12 @@ Return ONLY JSON: { "post_text": string, "critique": string }`,
               // Ground any take/question in what actually shipped, so the
               // optimizer can only sharpen a REAL angle, not invent one.
               const changeContext = [
+                projectContext ? `Project: ${projectContext}` : '',
                 commitMessage && `Commit: ${commitMessage.split('\n')[0]}`,
                 changes.length ? `Change(s): ${changes.map((c) => c.clause).join(' | ')}` : '',
                 pr?.title ? `PR: ${pr.title}` : '',
               ].filter(Boolean).join('\n');
-              const constraints = `${VOICE}\n\n${RUBRIC}\n\n- Keep the same facts and meaning as the draft.\n- If the draft has multiple lines (one per bundled change), keep it multi-line: do not add, drop, or merge lines.\n- Any take or question you add MUST be genuinely supported by the change context below. Do not invent opinions, criticisms, or claims, and never add a question just to farm replies. If there is no honest, specific take to make, keep the clean factual statement rather than forcing one.\n\nCHANGE CONTEXT (a take or question must be true to this):\n${changeContext || '(the draft above is all that is known)'}`;
+              const constraints = `${VOICE}\n\n${RUBRIC}\n\n- Keep the same facts and meaning as the draft.\n- Keep the draft's orientation for a first-time reader: do not strip the context that tells a stranger what the project is and why the change matters.\n- If the draft has multiple lines (one per bundled change), keep it multi-line: do not add, drop, or merge lines.\n- Any take or question you add MUST be genuinely supported by the change context below. Do not invent opinions, criticisms, or claims, and never add a question just to farm replies. If there is no honest, specific take to make, keep the clean factual statement rather than forcing one.\n\nCHANGE CONTEXT (a take or question must be true to this):\n${changeContext || '(the draft above is all that is known)'}`;
               // The optimizer's LLM interface is (prompt) => parsed JSON — exactly
               // what gemini() returns — so we adapt it inline (no extra import).
               const scoreLlm = (prompt) => gemini([{ text: prompt }]);

@@ -27,6 +27,10 @@ inputs:
     description: 'JSON array of route paths to hint the screenshotter, e.g. ''["/", "/players"]''.'
     required: false
     default: ''
+  project-context:
+    description: 'One or two sentences on what this project is, used to orient a first-time reader so posts are not vague (e.g. "Jotter is a keyboard-first notes app for developers"). Optional: when unset, it is auto-derived from the repo description + README intro. It grounds the copy, it is never pasted verbatim into a post.'
+    required: false
+    default: ''
   interactive-shots:
     description: 'When "true" (default), the screenshotter may click/hover/select navigational and display controls to drive the page to a more compelling state before shooting (e.g. open the right screen, switch to a branded theme, open a menu). Set "false" to only screenshot routes as-loaded. Never triggers mutating/financial/account/send actions.'
     required: false
@@ -177,6 +181,7 @@ runs:
         DRY_RUN: ${{ inputs.dry-run }}
         HOMEPAGE_URL: ${{ inputs.homepage-url }}
         ROUTES: ${{ inputs.routes }}
+        PROJECT_CONTEXT: ${{ inputs.project-context }}
         INTERACTIVE_SHOTS: ${{ inputs.interactive-shots }}
         INTERACTION_HINTS: ${{ inputs.interaction-hints }}
         INTERACTION_VIDEOS: ${{ inputs.interaction-videos }}

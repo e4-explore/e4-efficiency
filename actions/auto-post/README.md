@@ -77,6 +77,7 @@ of parent order.
 | `x-access-token` / `x-access-token-secret` | yes | — | Read+Write. |
 | `homepage-url` | no | `''` | Deployed site to screenshot. Required unless the consumer commits `cover.png` or a `config.json` preview. |
 | `routes` | no | `''` | JSON array of route paths to hint the screenshotter. |
+| `project-context` | no | `''` | One or two sentences on what this project is, so posts orient a first-time reader instead of reading vague. When unset, it's auto-derived from the repo description + README intro. Grounds the copy; never pasted verbatim into a post. |
 | `interactive-shots` | no | `'true'` | Let the screenshotter click/hover/select navigational + display controls to drive the page to a more compelling state before shooting. Never triggers mutating/financial/account/send actions. `'false'` = shoot routes as-loaded. |
 | `interaction-hints` | no | `''` | Free-text steering for interactive shots, e.g. `"Prefer a branded theme and composed example screens over atomic component stories."` |
 | `interaction-videos` | no | `'true'` | A change the model flags as an interaction/motion (drag/reorder, expand/collapse, tab switch, hover reveal, animation) is captured as a short screen recording (mp4) with a synthetic cursor instead of a still. Needs ffmpeg (present on GitHub-hosted runners) + `interactive-shots`; falls back to a still on any trouble. `'false'` = always stills. |
@@ -97,10 +98,12 @@ of parent order.
 ## Consumer-side config (optional, committed in the consumer repo)
 
 - `.github/auto-post/cover.png` — static image, used verbatim (highest priority).
-- `.github/auto-post/config.json` — `{ "preview": {...}, "routes": [...], "includeCommitLink": bool }`.
+- `.github/auto-post/config.json` — `{ "preview": {...}, "routes": [...], "projectContext": "…", "includeCommitLink": bool }`.
   A `preview` build/serve makes screenshots match the exact commit (no deployed
-  URL needed). `routes`/`includeCommitLink` here are overridden by the action
-  inputs when those are set.
+  URL needed). `projectContext` is what the project is, so posts orient a
+  first-time reader (auto-derived from the repo description + README when
+  omitted). `routes`/`projectContext`/`includeCommitLink` here are overridden by
+  the action inputs when those are set.
 - `.github/auto-post/history.jsonl` — written by the action and committed back;
   the caller's `paths-ignore` keeps that commit from retriggering the workflow.
 

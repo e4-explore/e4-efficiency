@@ -1,5 +1,6 @@
 {
-  "_comment": "Rename to config.json to activate (vendored mode only — the referenced action takes these as inputs instead). `preview` builds & serves the pushed code in CI so screenshots match the commit exactly (no deployed URL needed); omit it to screenshot the deployed homepage. `routes` hints Gemini toward real pages worth screenshotting. `includeCommitLink` appends the commit URL to the post (default false). `flows` are optional owner-scripted product flows — see `_flows_comment`.",
+  "_comment": "Rename to config.json to activate (vendored mode only — the referenced action takes these as inputs instead). `preview` builds & serves the pushed code in CI so screenshots match the commit exactly (no deployed URL needed); omit it to screenshot the deployed homepage. `routes` hints Gemini toward real pages worth screenshotting. `projectContext` is one or two sentences on what this project is, so posts orient a first-time reader instead of reading vague (omit it and it's auto-derived from the repo description + README; it grounds the copy, it's never pasted into a post). `includeCommitLink` appends the commit URL to the post (default false). `flows` are optional owner-scripted product flows — see `_flows_comment`.",
+  "projectContext": "Acme Boards is a keyboard-first kanban app for small engineering teams.",
   "preview": {
     "command": "npm ci && npm run build && npx serve -l 4173 dist",
     "port": 4173,
