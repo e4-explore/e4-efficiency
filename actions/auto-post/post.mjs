@@ -97,13 +97,17 @@ Voice rules (follow strictly):
 - Never the changelog pattern "X now does Y to reflect Z".
 - Assume the reader has never heard of this project. Give just enough that a stranger can tell what it is and why the change matters, still in one casual sentence. Never bolt on a boilerplate "In [Product]," label to do it, let the orientation live inside the sentence.
 
-Do NOT write like AI. Specifically:
+Do NOT write like AI. These are the giveaways that scream "a model wrote this"; avoid every one:
 - No em dashes or en dashes (the "—" or "–" characters) anywhere. Use a comma, a period, or reword the sentence. This is the single most important rule.
+- No "it's not X, it's Y" reversal (and its cousins "this isn't a workflow, it's a mindset", "not just X, but Y"). Just state what the thing is. BEFORE: "This isn't a settings page, it's a control center." AFTER: "The settings page now groups every toggle in one place."
+- No rhetorical question you immediately answer ("The result? Faster loads." / "The best part? It's free."). Either ask one real question at the very end, or make the statement. BEFORE: "The result? Bets load instantly." AFTER: "Bets now load instantly."
+- No three-word stack of one-word sentences ("Simple. Clean. Powerful.") and no rule-of-three padding ("clean, fast, and easy to scan"). Keep the one word that actually matters.
+- No fake lead-ins: "Here's the thing", "The thing is", "Let's be honest", "Make no mistake", "Truth is", "Plot twist". Delete the wind-up and open on the point. BEFORE: "Here's the thing: onboarding was slow." AFTER: "Onboarding was slow, so it's now one screen."
 - Drop the "feature — benefit" / "does X, keeping things Y" appendage formula. Just say the thing.
-- No rule-of-three padding ("clean, fast, and easy to scan"): keep the one that actually matters.
+- No filler intensifiers: "genuinely", "really", "truly", "honestly", "literally", "actually", "very", "just". They add nothing; cut them. BEFORE: "I genuinely think this is a really powerful shift." AFTER: "This is a useful shift."
 - Never these tell-words or phrases: seamless(ly), robust, elevate, leverage, streamline, effortless, empower, unlock, delve, boasts, "designed to", "ensures that", "when it comes to", "not only ... but also", "it's worth noting", "in today's", "game changer", "the power of".
 - No hype words: "amazing", "exciting", "thrilled", "stoked", "huge", "massive".
-- No exclamation marks. No emojis anywhere. No hashtags unless they genuinely add reach.
+- No exclamation marks. No emojis anywhere. No hashtags unless they add real reach.
 ${limitLine}
 
 Engagement, but only when it's honest:
@@ -162,12 +166,24 @@ export function pickPostMedia(media) {
 // Belt-and-suspenders removal of the mechanical "AI wrote this" tells the model
 // still slips in despite the voice rules. The em/en dash is the loudest signal:
 // a dash (with whatever spacing) becomes a comma, which keeps the line casual
-// and flowing. Deliberately conservative — it only touches punctuation and
-// spacing, never rewords, and preserves newlines so bundled posts keep one
-// change per line. Rewording the underlying phrasing is the voice rules' job.
+// and flowing. It also DELETES two tells that are safe to remove without
+// rewording: fake lead-ins ("Here's the thing:") and filler intensifiers
+// ("really", "genuinely"), then repairs the capitalization/spacing. It never
+// rephrases and preserves newlines so bundled posts keep one change per line;
+// the reversal / rhetorical-question / three-word-stack tells need real
+// rewrites, so those stay with the voice rules and the editor pass.
 export function stripAiTells(text) {
   return String(text)
     .replace(/[ \t]*[—–][ \t]*/g, ', ') // — or – (any surrounding spaces) -> ", "
+    // Drop a fake lead-in at the start of a line/sentence, then re-capitalize the
+    // word that becomes the new opener.
+    .replace(
+      /(^|[.!?]\s+|\n[ \t]*)(?:here'?s the thing|here'?s the deal|the thing is|let'?s be honest|let'?s be real|make no mistake|truth is|plot twist|newsflash)\b[:,]?\s*([A-Za-z])/gi,
+      (_m, pre, ch) => pre + ch.toUpperCase(),
+    )
+    // Drop a mid-sentence filler intensifier (only when preceded by a word, so a
+    // sentence-initial one is left for the editor to reword rather than mangled).
+    .replace(/(?<=[A-Za-z][ \t])(?:really|genuinely|truly|honestly|literally|actually)\b[ \t]+/gi, '')
     .replace(/,[ \t]*,/g, ',')                     // collapse a doubled comma the swap may create
     .replace(/,([ \t]*[.;:!?])/g, '$1')            // ", ." -> "." when a dash sat before end punctuation
     .replace(/[ \t]+([,.;:!?])/g, '$1')            // no space before punctuation
@@ -197,6 +213,26 @@ export function lintVoice(text) {
   if (/\p{Extended_Pictographic}/u.test(t)) violations.push({ rule: 'emoji' });
   const hashtags = (t.match(/(^|\s)#[A-Za-z]\w*/g) || []).length;
   if (hashtags > 1) violations.push({ rule: 'hashtags', detail: String(hashtags) });
+
+  // AI writing-tell patterns (from the "you can always tell when a model wrote it"
+  // list). These are the ones we can read straight off the text.
+  // The "it's not X, it's Y" reversal: a negation, then a comma, then "it's"/"but".
+  const reversal = t.match(/\b(?:isn'?t|is not|are not|aren'?t|not just|not only|not about)\b[^.?!\n]{1,60}?,\s*(?:it'?s|it is|they'?re|that'?s|but)\b/i);
+  if (reversal) violations.push({ rule: 'reversal', detail: reversal[0].slice(0, 40) });
+  // A rhetorical question answered in the same breath: a SHORT (1-4 word) capped
+  // fragment ending in "?" with more text after it (a real question ends the post).
+  const rq = t.match(/(?:^|[.!?]\s+)([A-Z][\w']*(?:\s+[\w']+){0,3})\?\s+["“(]?[A-Za-z]/);
+  if (rq) violations.push({ rule: 'rhetorical-qa', detail: rq[1].slice(0, 40) });
+  // Three-word stack of one-word sentences: "Simple. Clean. Powerful."
+  const stack = t.match(/\b[A-Z][a-z]+\.\s+[A-Z][a-z]+\.\s+[A-Z][a-z]+\./);
+  if (stack) violations.push({ rule: 'three-word-stack', detail: stack[0].slice(0, 40) });
+  // Fake lead-ins that wind up before the point.
+  const lead = t.match(/(?:^|[.!?]\s+|\n\s*)(here'?s the thing|here'?s the deal|the thing is|let'?s be honest|let'?s be real|make no mistake|truth is|plot twist|newsflash)\b/i);
+  if (lead) violations.push({ rule: 'fake-lead-in', detail: lead[1] });
+  // Filler intensifiers that add nothing.
+  const filler = t.match(/\b(genuinely|really|truly|honestly|literally|actually)\b/i);
+  if (filler) violations.push({ rule: 'filler', detail: filler[1] });
+
   if (t.length > 280) violations.push({ rule: 'over-length', detail: String(t.length) });
   return violations;
 }
@@ -2356,7 +2392,7 @@ You are the editor. Improve the draft below so it scores as high as possible on 
 
 Sanity-check visibility, not just engagement: X decides whether a post is shown at all (visibility filtering) separately from how it ranks, and out-of-network recommendations are dropped entirely for anything that trips a spam / "Do Not Amplify" / misleading label. Keep the draft clean of misleading claims, manufactured controversy, and engagement-farming. A safe, substantive post a stranger would forward beats a spicy one that risks being suppressed.
 
-Before returning, reread the draft and strip anything that reads as AI-written: em/en dashes, the "feature — benefit" appendage, rule-of-three lists, and the banned tell-words in the voice rules. Rewrite those spots in plain, casual, human phrasing rather than just deleting the punctuation.
+Before returning, reread the draft and strip anything that reads as AI-written: em/en dashes, the "it's not X, it's Y" reversal, a rhetorical question you answer yourself ("The result? ..."), three-word stacks ("Simple. Clean. Powerful."), fake lead-ins ("Here's the thing", "The thing is", "Let's be honest"), filler intensifiers ("genuinely", "really", "truly", "honestly", "actually", "just"), the "feature — benefit" appendage, rule-of-three lists, and the banned tell-words in the voice rules. Rewrite those spots in plain, casual, human phrasing rather than just deleting the punctuation.
 ${historyBlock}${prBlock}${projectContext ? `\nWHAT THIS PROJECT IS (assume the reader has never heard of it, keep enough orientation that the post stands alone, do NOT prepend it as a label): ${projectContext}\n` : ''}
 DRAFT: ${postText}
 COMMIT MESSAGE: ${commitMessage}
